@@ -237,6 +237,8 @@ Non-comprehensive list of changes in this release
 * Since MSVC 19.33 added undocumented attribute ``[[msvc::constexpr]]``, this release adds the attribute as well.
 
 * Added ``#pragma clang fp reciprocal``.
+* Builtins ``__builtin_shufflevector()`` and ``__builtin_convertvector()`` may now be used within constant
+ expressions.
 
 New Compiler Flags
 ------------------

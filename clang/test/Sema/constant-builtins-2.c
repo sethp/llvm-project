@@ -302,3 +302,64 @@ extern __typeof__(__builtin_expect(0, 0)) bi0;
 // Strings
 int array1[__builtin_strlen("ab\0cd")];
 int array2[(sizeof(array1)/sizeof(int)) == 2? 1 : -1];
+
+typedef double vector4double __attribute__((__vector_size__(32)));
+typedef float vector4float __attribute__((__vector_size__(16)));
+typedef long long vector4long __attribute__((__vector_size__(32)));
+typedef int vector4int __attribute__((__vector_size__(16)));
+typedef short vector4short __attribute__((__vector_size__(8)));
+typedef char vector4char __attribute__((__vector_size__(4)));
+typedef double vector8double __attribute__((__vector_size__(64)));
+typedef float vector8float __attribute__((__vector_size__(32)));
+typedef long long vector8long __attribute__((__vector_size__(64)));
+typedef int vector8int __attribute__((__vector_size__(32)));
+typedef short vector8short __attribute__((__vector_size__(16)));
+typedef char vector8char __attribute__((__vector_size__(8)));
+
+// Convert vector
+#define CHECK_NUM(__size, __typeFrom, __typeTo, ...)                            \
+  vector##__size##__typeTo                                                      \
+      from_##vector##__size##__typeFrom##_to_##vector##__size##__typeTo##_var = \
+          __builtin_convertvector((vector##__size##__typeFrom){__VA_ARGS__},    \
+                                  vector##__size##__typeTo);
+#define CHECK_TO_ALL_TYPES(__size, __typeFrom, ...)                            \
+  CHECK_NUM(__size, __typeFrom, double, __VA_ARGS__)                           \
+  CHECK_NUM(__size, __typeFrom, float, __VA_ARGS__)                            \
+  CHECK_NUM(__size, __typeFrom, long, __VA_ARGS__)                             \
+  CHECK_NUM(__size, __typeFrom, int, __VA_ARGS__)                              \
+  CHECK_NUM(__size, __typeFrom, short, __VA_ARGS__)                            \
+  CHECK_NUM(__size, __typeFrom, char, __VA_ARGS__)
+
+#define CHECK_ALL_COMBINATIONS(__size, ...)                                    \
+  CHECK_TO_ALL_TYPES(__size, double, __VA_ARGS__)                              \
+  CHECK_TO_ALL_TYPES(__size, float, __VA_ARGS__)                               \
+  CHECK_TO_ALL_TYPES(__size, long, __VA_ARGS__)                                \
+  CHECK_TO_ALL_TYPES(__size, int, __VA_ARGS__)                                 \
+  CHECK_TO_ALL_TYPES(__size, short, __VA_ARGS__)                               \
+  CHECK_TO_ALL_TYPES(__size, char, __VA_ARGS__)
+
+CHECK_ALL_COMBINATIONS(4, 0, 1, 2, 3);
+CHECK_ALL_COMBINATIONS(8, 0, 1, 2, 3, 4, 5, 6, 7);
+#undef CHECK_ALL_COMBINATIONS
+#undef CHECK_TO_ALL_TYPES
+#undef CHECK_NUM
+
+// Shuffle vector
+vector4int const vector4intConst1 = {0, 1, 2, 3};
+vector4int const vector4intConst2 = {4, 5, 6, 7};
+vector8int const vector8intConst = {};
+
+vector4int vectorShuffle1 =
+    __builtin_shufflevector(vector4intConst1, vector4intConst2, 0, 1, 2, 3);
+vector4int vectorShuffle2 =
+    __builtin_shufflevector(vector4intConst1, vector4intConst2, 4, 5, 6, 7);
+vector4int vectorShuffle3 =
+    __builtin_shufflevector(vector4intConst1, vector4intConst2, -1, -1, -1, -1);
+vector4int vectorShuffle4 =
+    __builtin_shufflevector(vector4intConst1, vector4intConst2, 0, 2, 4, 6);
+vector8int vectorShuffle5 = __builtin_shufflevector(
+    vector8intConst, vector8intConst, 0, 2, 4, 6, 8, 10, 12, 14);
+vector4int vectorShuffle6 = __builtin_shufflevector(
+    vector8intConst, vector8intConst, 0, 2, 4, 6);
+vector8int vectorShuffle7 =
+    __builtin_shufflevector(vector4intConst1, vector4intConst2, 0, 2, 4, 6, 1, 3, 5, 7);
