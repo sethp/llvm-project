@@ -10909,15 +10909,11 @@ static bool EvaluateVectorOrLValue(APValue &Result, EvalInfo &Info,
     // it was an rvalue to get the current APValue.
     LValue LValueFound;
     LValueFound.setFrom(Info.Ctx, Result);
-    if (!handleLValueToRValueConversion(Info, E, Type, LValueFound, Result)) {
+    if (!handleLValueToRValueConversion(Info, E, Type, LValueFound, Result))
       return false;
-    }
   }
 
-  if (!Result.isVector()) {
-    return false;
-  }
-  return true;
+  return Result.isVector();
 }
 
 static bool handleVectorConversion(EvalInfo &Info, const FPOptions FPO,
@@ -10961,9 +10957,10 @@ bool VectorExprEvaluator::VisitConvertVectorExpr(const ConvertVectorExpr *E) {
 
   const FPOptions FPO = E->getFPFeaturesInEffect(Info.Ctx.getLangOpts());
 
+  auto SourceLen = Source.getVectorLength();
   SmallVector<APValue, 4> ResultElements;
-  ResultElements.reserve(Source.getVectorLength());
-  for (unsigned EltNum = 0; EltNum < Source.getVectorLength(); ++EltNum) {
+  ResultElements.reserve(SourceLen);
+  for (unsigned EltNum = 0; EltNum < SourceLen; ++EltNum) {
     APValue Elt;
     if (!handleVectorConversion(Info, FPO, E, SourceTy, DestTy,
                                 Source.getVectorElt(EltNum), Elt))
@@ -10982,22 +10979,19 @@ static bool handleVectorShuffle(EvalInfo &Info, const ShuffleVectorExpr *E,
 
   Expr const *IndexExpr = E->getExpr(2 + EltNum);
   APSInt IndexVal;
-  if (!EvaluateInteger(IndexExpr, IndexVal, Info)) {
+  if (!EvaluateInteger(IndexExpr, IndexVal, Info))
     return false;
-  }
 
   uint32_t index = IndexVal.getZExtValue();
   // The spec says that -1 should be treated as undef for optimizations,
   // but in constexpr we need to choose a value. We'll choose 0.
-  if (index >= TotalElementsInAVector * 2) {
+  if (index >= TotalElementsInAVector * 2)
     index = 0;
-  }
 
-  if (index >= TotalElementsInAVector) {
+  if (index >= TotalElementsInAVector)
     Result = VecVal2.getVectorElt(index - TotalElementsInAVector);
-  } else {
+  else
     Result = VecVal1.getVectorElt(index);
-  }
   return true;
 }
 
@@ -11012,9 +11006,9 @@ bool VectorExprEvaluator::VisitShuffleVectorExpr(const ShuffleVectorExpr *E) {
     return false;
 
   VectorType const *DestVecTy = E->getType()->castAs<VectorType>();
-  if (!DestVecTy) {
+  if (!DestVecTy)
     return false;
-  }
+
   QualType DestElTy = DestVecTy->getElementType();
 
   auto TotalElementsInOutputVector = DestVecTy->getNumElements();
