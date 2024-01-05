@@ -238,7 +238,7 @@ Non-comprehensive list of changes in this release
 
 * Added ``#pragma clang fp reciprocal``.
 * Builtins ``__builtin_shufflevector()`` and ``__builtin_convertvector()`` may now be used within constant
- expressions.
+  expressions.
 
 New Compiler Flags
 ------------------
