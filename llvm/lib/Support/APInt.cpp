@@ -25,6 +25,8 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <optional>
 
 using namespace llvm;
@@ -334,6 +336,37 @@ void APInt::setBitsSlowCase(unsigned loBit, unsigned hiBit) {
     U.pVal[word] = WORDTYPE_MAX;
 }
 
+void APInt::clearBitsSlowCase(unsigned loBit, unsigned hiBit) {
+  unsigned loWord = whichWord(loBit);
+  unsigned hiWord = whichWord(hiBit);
+
+  unsigned loPos = whichBit(loBit);
+  unsigned hiPos = whichBit(hiBit);
+  if (loWord == hiWord) {
+    uint64_t mask = maskTrailingOnes<uint64_t>(hiPos - loPos);
+    mask <<= loPos;
+    U.pVal[loWord] &= ~mask;
+    return;
+  }
+
+  if (loPos > 0) {
+    uint64_t loMask = maskTrailingOnes<uint64_t>(loPos);
+    U.pVal[loWord] &= loMask;
+    loWord++;
+  }
+
+  if (hiPos > 0) {
+    uint64_t hiMask = maskTrailingZeros<uint64_t>(hiPos);
+    U.pVal[hiWord] &= hiMask;
+    if (hiWord <= loWord)
+      return; // we've covered all the bits
+  }
+  assert(hiWord >= loWord);
+
+  // Fill any words between loWord and hiWord with all zeros.
+  memset(&U.pVal[loWord], 0, (hiWord - loWord) * APINT_WORD_SIZE);
+}
+
 // Complement a bignum in-place.
 static void tcComplement(APInt::WordType *dst, unsigned parts) {
   for (unsigned i = 0; i < parts; i++)
@@ -365,62 +398,67 @@ void APInt::flipBit(unsigned bitPosition) {
   setBitVal(bitPosition, !(*this)[bitPosition]);
 }
 
-void APInt::insertBits(const APInt &subBits, unsigned bitPosition) {
-  unsigned subBitWidth = subBits.getBitWidth();
-  assert((subBitWidth + bitPosition) <= BitWidth && "Illegal bit insertion");
+void APInt::insertBits(const APInt &SubBits, unsigned bitPosition) {
+  insertBits(SubBits, 0, bitPosition, SubBits.getBitWidth());
+}
+
+void APInt::insertBits(const APInt &SubBits, unsigned srcBit,
+                       unsigned bitPosition, unsigned numBits) {
+  assert((numBits + bitPosition) <= BitWidth && "Illegal bit insertion");
+  assert((numBits + srcBit) <= SubBits.getBitWidth() && "Illegal bit range");
+  // the below suffices because no two APInts share a subrange of their memory
+  assert(&SubBits != this &&
+         "Illegal bit insertion (aliased)"); // neither we nor memcpy handles
+                                             // overlapping memory ranges well
 
   // inserting no bits is a noop.
-  if (subBitWidth == 0)
+  if (numBits == 0)
     return;
 
-  // Insertion is a direct copy.
-  if (subBitWidth == BitWidth) {
-    *this = subBits;
-    return;
-  }
-
-  // Single word result can be done as a direct bitmask.
-  if (isSingleWord()) {
-    uint64_t mask = WORDTYPE_MAX >> (APINT_BITS_PER_WORD - subBitWidth);
-    U.VAL &= ~(mask << bitPosition);
-    U.VAL |= (subBits.U.VAL << bitPosition);
-    return;
-  }
+  uint64_t *Base = isSingleWord() ? &U.VAL : U.pVal;
+  uint64_t *loWord = Base + whichWord(bitPosition);
+  uint64_t *hi1Word = Base + whichWord(bitPosition + numBits - 1);
 
   unsigned loBit = whichBit(bitPosition);
-  unsigned loWord = whichWord(bitPosition);
-  unsigned hi1Word = whichWord(bitPosition + subBitWidth - 1);
-
-  // Insertion within a single word can be done as a direct bitmask.
-  if (loWord == hi1Word) {
-    uint64_t mask = WORDTYPE_MAX >> (APINT_BITS_PER_WORD - subBitWidth);
-    U.pVal[loWord] &= ~(mask << loBit);
-    U.pVal[loWord] |= (subBits.U.VAL << loBit);
-    return;
+  if (loBit > 0) {
+    // Insertion within a single word can be done as a direct bitmask.
+    uint64_t nb = std::min(APINT_BITS_PER_WORD - loBit, numBits);
+    uint64_t mask = maskTrailingOnes<uint64_t>(nb);
+    *loWord &= ~(mask << loBit);
+    *loWord |= (SubBits.extractBitsAsZExtValue(nb, srcBit) << loBit);
+    ++loWord;
+    srcBit += nb;
+    numBits -= nb;
   }
 
-  // Insert on word boundaries.
-  if (loBit == 0) {
-    // Direct copy whole words.
-    unsigned numWholeSubWords = subBitWidth / APINT_BITS_PER_WORD;
-    memcpy(U.pVal + loWord, subBits.getRawData(),
+  if (loWord > hi1Word)
+    return; // src bits all fit within the single word above
+
+  // set whole words (if any).
+  if (whichBit(srcBit) == 0) {
+    // We get to memcpy directly
+    unsigned numWholeSubWords = numBits / APINT_BITS_PER_WORD;
+    memcpy(loWord, SubBits.getRawData() + whichWord(srcBit),
            numWholeSubWords * APINT_WORD_SIZE);
-
-    // Mask+insert remaining bits.
-    unsigned remainingBits = subBitWidth % APINT_BITS_PER_WORD;
-    if (remainingBits != 0) {
-      uint64_t mask = WORDTYPE_MAX >> (APINT_BITS_PER_WORD - remainingBits);
-      U.pVal[hi1Word] &= ~mask;
-      U.pVal[hi1Word] |= subBits.getWord(subBitWidth - 1);
+    srcBit += numWholeSubWords * APINT_BITS_PER_WORD;
+  } else {
+    // otherwise, we've got to merge together bits from two src words per
+    // inserted word
+    const unsigned loBit = whichBit(srcBit);
+    uint64_t *srcWord = SubBits.U.pVal + whichWord(srcBit);
+    for (; loWord < hi1Word; ++loWord, srcBit += APINT_BITS_PER_WORD) {
+      *loWord = *srcWord >> loBit;
+      *loWord |= *(++srcWord) << (APINT_BITS_PER_WORD - loBit);
     }
-    return;
   }
 
-  // General case - set/clear individual bits in dst based on src.
-  // TODO - there is scope for optimization here, but at the moment this code
-  // path is barely used so prefer readability over performance.
-  for (unsigned i = 0; i != subBitWidth; ++i)
-    setBitVal(bitPosition + i, subBits[i]);
+  // Mask+insert remaining bits.
+  unsigned remainingBits = numBits % APINT_BITS_PER_WORD;
+  if (remainingBits != 0) {
+    uint64_t mask = maskTrailingOnes<uint64_t>(remainingBits);
+    *hi1Word &= ~mask;
+    *hi1Word |= SubBits.extractBitsAsZExtValue(remainingBits, srcBit);
+  }
 }
 
 void APInt::insertBits(uint64_t subBits, unsigned bitPosition, unsigned numBits) {
@@ -431,6 +469,10 @@ void APInt::insertBits(uint64_t subBits, unsigned bitPosition, unsigned numBits)
     U.VAL |= subBits << bitPosition;
     return;
   }
+
+  // inserting no bits is a noop.
+  if (numBits == 0)
+    return;
 
   unsigned loBit = whichBit(bitPosition);
   unsigned loWord = whichWord(bitPosition);

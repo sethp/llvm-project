@@ -14,6 +14,7 @@
 #include "llvm/Support/Alignment.h"
 #include "gtest/gtest.h"
 #include <array>
+#include <cstdint>
 #include <optional>
 
 using namespace llvm;
@@ -1981,6 +1982,10 @@ TEST(APIntTest, insertBits) {
   i63.insertBits(iSrc, 4);
   EXPECT_EQ(static_cast<int64_t>(0x012345600123456Full), i63.getSExtValue());
 
+  // Direct copy (partial src)
+  i31.insertBits(i63, 4, 0, 31);
+  EXPECT_EQ(static_cast<int64_t>(0x00123456ull), i31.getSExtValue());
+
   // Zero width insert is a noop.
   i31.insertBits(APInt::getZeroWidth(), 1);
   EXPECT_EQ(static_cast<int64_t>(0x00123456ull), i31.getSExtValue());
@@ -2023,6 +2028,45 @@ TEST(APIntTest, insertBits) {
   EXPECT_EQ(i260.extractBits(64, 128).getZExtValue(), 0xFFFFFFFFFFFF0000ull);
   EXPECT_EQ(i260.extractBits(64, 192).getZExtValue(), 0xFFFFFFFFFFFFFFFFull);
   EXPECT_EQ(i260.extractBits(4, 256).getZExtValue(), 0x000000000000000Full);
+
+  // General insertion: one source word, one target word
+  i260.clearAllBits();
+  i260.insertBits(APInt(63, (~0ull << 12) + 1), 65);
+  EXPECT_EQ(i260.extractBits(64, 0).getZExtValue(), 0x0ull);
+  EXPECT_EQ(i260.extractBits(64, 64).getZExtValue(), 0xFFFFFFFFFFFFE002ull);
+  EXPECT_EQ(i260.extractBits(132, 128).getZExtValue(), 0x0ull);
+
+  i260.clearAllBits();
+  i260.insertBits(APInt(63, (~0ull << 12) + 1), 12, 64, 51);
+  EXPECT_EQ(i260.extractBits(64, 0).getZExtValue(), 0x0ull);
+  EXPECT_EQ(i260.extractBits(64, 64).getZExtValue(), 0x0007'FFFF'FFFF'FFFFull);
+  EXPECT_EQ(i260.extractBits(132, 128).getZExtValue(), 0x0ull);
+
+  // General insertion: one source word (straddles two target words)
+  i260.clearAllBits();
+  i260.insertBits(APInt(63, ~0ull << 12), 15);
+  EXPECT_EQ(i260.extractBits(64, 0).getZExtValue(), 0xFFFFFFFFF8000000ull);
+  EXPECT_EQ(i260.extractBits(64, 64).getZExtValue(), 0x0000000000003FFFull);
+  EXPECT_EQ(i260.extractBits(132, 128).getZExtValue(), 0x0ull);
+
+  i260.clearAllBits();
+  i260.insertBits(APInt(63, (~0ull << 12) + 1), 12, 56, 36);
+  EXPECT_EQ(i260.extractBits(64, 0).getZExtValue(), 0xFF00'0000'0000'0000ull);
+  EXPECT_EQ(i260.extractBits(64, 64).getZExtValue(), 0x0000'0000'0FFF'FFFFull);
+  EXPECT_EQ(i260.extractBits(132, 128).getZExtValue(), 0x0ull);
+
+  APInt i136(136, {0x5555555555555555ull, 0x5555555555555555ull, 0x1Full});
+  i260.clearAllBits();
+  // one insert that can memcpy at least once...
+  i260.insertBits(i136, 0);
+  // ... and one that can't
+  i260.insertBits(i136, 5, 132, 128);
+  static_assert(0xa == (0x5 << 1));
+  EXPECT_EQ(i260.extractBits(64, 0).getZExtValue(), 0x5555555555555555ull);
+  EXPECT_EQ(i260.extractBits(64, 64).getZExtValue(), 0x5555555555555555ull);
+  EXPECT_EQ(i260.extractBits(64, 128).getZExtValue(), 0xAAAAAAAAAAAAAAAFull);
+  EXPECT_EQ(i260.extractBits(64, 192).getZExtValue(), 0xAAAAAAAAAAAAAAAAull);
+  EXPECT_EQ(i260.extractBits(4, 256).getZExtValue(), 0xFull);
 }
 
 TEST(APIntTest, insertBitsUInt64) {
@@ -2033,6 +2077,9 @@ TEST(APIntTest, insertBitsUInt64) {
   APInt i31(31, 0x76543210ull);
   i31.insertBits(iSrc, 0, 31);
   EXPECT_EQ(static_cast<int64_t>(0x00123456ull), i31.getSExtValue());
+
+  i31.insertBits(iSrc, 0, 0);
+  i31.insertBits(iSrc, 31, 0);
 
   // Single word src/dst insertion.
   APInt i63(63, 0x01234567FFFFFFFFull);
@@ -2066,7 +2113,8 @@ TEST(APIntTest, insertBitsUInt64) {
   EXPECT_EQ(0u, i256.getSExtValue());
 
   APInt i257(257, 0);
-  i257.insertBits(APInt(96, UINT64_MAX, true), 64);
+  i257.insertBits(UINT64_MAX, 64, 64);
+  i257.insertBits(UINT64_MAX, 128, 32);
   EXPECT_EQ(i257.extractBitsAsZExtValue(64, 0), 0x0000000000000000ull);
   EXPECT_EQ(i257.extractBitsAsZExtValue(64, 64), 0xFFFFFFFFFFFFFFFFull);
   EXPECT_EQ(i257.extractBitsAsZExtValue(64, 128), 0x00000000FFFFFFFFull);
@@ -2075,7 +2123,9 @@ TEST(APIntTest, insertBitsUInt64) {
 
   // General insertion.
   APInt i260(260, UINT64_MAX, true);
-  i260.insertBits(APInt(129, 1ull << 48), 15);
+  i260.insertBits(1ull << 48, 15, 64);
+  i260.insertBits(0, 79, 64);
+  i260.insertBits(0, 143, 1);
   EXPECT_EQ(i260.extractBitsAsZExtValue(64, 0), 0x8000000000007FFFull);
   EXPECT_EQ(i260.extractBitsAsZExtValue(64, 64), 0x0000000000000000ull);
   EXPECT_EQ(i260.extractBitsAsZExtValue(64, 128), 0xFFFFFFFFFFFF0000ull);
@@ -2495,6 +2545,71 @@ TEST(APIntTest, clearLowBits) {
   EXPECT_EQ(16u, i32hi16.countr_zero());
   EXPECT_EQ(0u, i32hi16.countr_one());
   EXPECT_EQ(16u, i32hi16.popcount());
+}
+
+TEST(APIntTest, clearBits) {
+  APInt i32 = APInt::getAllOnes(32);
+  i32.clearBits(1, 32);
+  EXPECT_EQ(1ul, i32);
+  i32.clearBits(0, 0);
+  i32.clearBits(32, 32);
+  EXPECT_EQ(1ul, i32);
+  i32.clearBits(0, 1);
+  EXPECT_EQ(0ul, i32);
+
+  APInt i128 = APInt::getAllOnes(128);
+  i128.clearBits(24, 64);
+  i128.clearBits(1, 4);
+  EXPECT_EQ(0xfffff1ull, i128.extractBitsAsZExtValue(64, 0));
+  i128.clearBits(1, 24);
+  i128.clearBits(1, 1);
+  i128.clearBits(0, 0);
+  EXPECT_EQ(1ull, i128.extractBitsAsZExtValue(64, 0));
+  i128.clearBits(63, 65);
+  i128.clearBits(65, 128);
+  EXPECT_EQ(1ull, i128.extractBitsAsZExtValue(64, 0));
+  EXPECT_EQ(0ull, i128.extractBitsAsZExtValue(64, 64));
+
+  APInt i80hi1lo1 = APInt::getAllOnes(80);
+  i80hi1lo1.clearBits(1, 79);
+  EXPECT_EQ(1u, i80hi1lo1.countl_one());
+  EXPECT_EQ(0u, i80hi1lo1.countl_zero());
+  EXPECT_EQ(80u, i80hi1lo1.getActiveBits());
+  EXPECT_EQ(0u, i80hi1lo1.countr_zero());
+  EXPECT_EQ(1u, i80hi1lo1.countr_one());
+  EXPECT_EQ(2u, i80hi1lo1.popcount());
+
+  APInt i128hi48 = APInt::getAllOnes(128);
+  i128hi48.clearBits(0, 80);
+  EXPECT_EQ(48u, i128hi48.countl_one());
+  EXPECT_EQ(0u, i128hi48.countl_zero());
+  EXPECT_EQ(128u, i128hi48.getActiveBits());
+  EXPECT_EQ(80u, i128hi48.countr_zero());
+  EXPECT_EQ(0u, i128hi48.countr_one());
+  EXPECT_EQ(48u, i128hi48.popcount());
+  EXPECT_EQ(0ull, i128hi48.extractBitsAsZExtValue(64, 0));
+  EXPECT_EQ(0xffffffff'ffff0000ull, i128hi48.extractBitsAsZExtValue(64, 64));
+
+  APInt i128hi48lo1 = APInt::getAllOnes(128);
+  i128hi48lo1.clearBits(1, 80);
+  EXPECT_EQ(1ull, i128hi48lo1.extractBitsAsZExtValue(64, 0));
+  EXPECT_EQ(0xffffffff'ffff0000ull, i128hi48lo1.extractBitsAsZExtValue(64, 64));
+
+  APInt i256_zero = APInt::getAllOnes(256);
+  i256_zero.clearBits(0, 256);
+  EXPECT_EQ(0ull, i256_zero.extractBitsAsZExtValue(64, 0));
+  EXPECT_EQ(0ull, i256_zero.extractBitsAsZExtValue(64, 64));
+  EXPECT_EQ(0ull, i256_zero.extractBitsAsZExtValue(64, 128));
+  EXPECT_EQ(0ull, i256_zero.extractBitsAsZExtValue(64, 192));
+
+  i256_zero.flipAllBits();
+  i256_zero.clearBits(0, 64);
+  i256_zero.clearBits(64, 192);
+  i256_zero.clearBits(192, 256);
+  EXPECT_EQ(0ull, i256_zero.extractBitsAsZExtValue(64, 0));
+  EXPECT_EQ(0ull, i256_zero.extractBitsAsZExtValue(64, 64));
+  EXPECT_EQ(0ull, i256_zero.extractBitsAsZExtValue(64, 128));
+  EXPECT_EQ(0ull, i256_zero.extractBitsAsZExtValue(64, 192));
 }
 
 TEST(APIntTest, GCD) {
@@ -3103,6 +3218,7 @@ TEST(APIntTest, ZeroWidth) {
   // Mutations.
   ZW.setBitsWithWrap(0, 0);
   ZW.setBits(0, 0);
+  ZW.clearBits(0, 0);
   ZW.clearAllBits();
   ZW.flipAllBits();
 

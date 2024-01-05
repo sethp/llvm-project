@@ -7126,23 +7126,11 @@ struct BitCastBuffer {
   inline static void copyBitsFrom(APInt &LHS, const BitSlice &Dst,
                                   const APInt &RHS, const BitSlice &Src) {
     assert(Src.size() == Dst.size());
-
-    if (Src.start() > 0 || Src.end() < RHS.getBitWidth() ||
-        RHS.getBitWidth() != Dst.size()) {
-      APInt Val = RHS.lshr(Src.start()).trunc(Src.size()).zext(Dst.size());
-      LHS.insertBits(Val, Dst.start());
-      return;
-    }
-    LHS.insertBits(RHS, Dst.start());
+    LHS.insertBits(RHS, Src.start(), Dst.start(), Src.size());
   }
 
   inline static void clearBits(APInt &Int, const BitSlice &Which) {
-    unsigned Bit = Which.start(), Rem = Which.size() % 64;
-    if (Rem > 0) // else APInt crashes when Bit == 0
-      Int.insertBits(0ull, Bit, Rem);
-    Bit += Rem;
-    for (unsigned End = Which.end(); Bit < End; Bit += 64)
-      Int.insertBits(0ull, Bit, 64u);
+    Int.clearBits(Which.start(), Which.end());
   }
 
   static llvm::FormattedBytes formatInt(const APInt &Int) {
