@@ -19,6 +19,7 @@
 #include "llvm/Support/MathExtras.h"
 #include <cassert>
 #include <climits>
+#include <cstdint>
 #include <cstring>
 #include <optional>
 #include <utility>
@@ -229,8 +230,8 @@ public:
   /// \p hiBit.
   ///
   /// \param numBits the intended bit width of the result
-  /// \param loBit the index of the lowest bit set.
-  /// \param hiBit the index of the highest bit set.
+  /// \param loBit the index of the lowest bit set. (i.e. inclusive)
+  /// \param hiBit the index after the highest bit set. (i.e. exclusive)
   ///
   /// \returns An APInt value with the requested bits set.
   static APInt getBitsSet(unsigned numBits, unsigned loBit, unsigned hiBit) {
@@ -1392,6 +1393,20 @@ public:
     *this &= Keep;
   }
 
+  /// clear the bits from loBit (inclusive) to hiBit (exclusive) to 0.
+  /// This function handles case when \p loBit <= \p hiBit.
+  void clearBits(unsigned loBit, unsigned hiBit) {
+    assert(hiBit <= BitWidth && "hiBit out of range");
+    assert(loBit <= BitWidth && "loBit out of range");
+    assert(loBit <= hiBit && "loBit greater than hiBit");
+    if (isSingleWord()) {
+      uint64_t mask = maskTrailingOnes<uint64_t>(hiBit - loBit);
+      mask <<= loBit;
+      U.VAL &= ~mask;
+    } else
+      clearBitsSlowCase(loBit, hiBit);
+  }
+
   /// Set the sign bit to 0.
   void clearSignBit() { clearBit(BitWidth - 1); }
 
@@ -1417,6 +1432,10 @@ public:
     ++(*this);
   }
 
+  /// Insert the numBits from another APInt (starting at srcBitPosition) to
+  /// [bitPosition,bitPosition+numBits)
+  void insertBits(const APInt &SubBits, unsigned srcBit, unsigned bitPosition,
+                  unsigned numBits);
   /// Insert the bits from a smaller APInt starting at bitPosition.
   void insertBits(const APInt &SubBits, unsigned bitPosition);
   void insertBits(uint64_t SubBits, unsigned bitPosition, unsigned numBits);
@@ -2004,6 +2023,9 @@ private:
 
   /// out-of-line slow case for setBits.
   void setBitsSlowCase(unsigned loBit, unsigned hiBit);
+
+  /// out-of-line slow case for clearBits.
+  void clearBitsSlowCase(unsigned loBit, unsigned hiBit);
 
   /// out-of-line slow case for flipAllBits.
   void flipAllBitsSlowCase();
