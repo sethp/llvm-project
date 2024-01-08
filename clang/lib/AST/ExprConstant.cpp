@@ -49,6 +49,7 @@
 #include "clang/AST/OptionalDiagnostic.h"
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/StmtVisitor.h"
+#include "clang/AST/Type.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/Basic/Builtins.h"
 #include "clang/Basic/DiagnosticSema.h"
@@ -435,6 +436,15 @@ namespace {
       MostDerivedType = EltTy;
       MostDerivedIsArrayElement = true;
       MostDerivedArraySize = 2;
+      MostDerivedPathLength = Entries.size();
+    }
+    /// Update this designator to refer to the given vector component.
+    void addVectorScalarElementUnchecked(QualType EltTy, uint64_t Elem) {
+      Entries.push_back(PathEntry::ArrayIndex(Elem));
+
+      MostDerivedType = EltTy;
+      MostDerivedIsArrayElement = false;
+      MostDerivedArraySize = 0;
       MostDerivedPathLength = Entries.size();
     }
     void diagnoseUnsizedArrayPointerArithmetic(EvalInfo &Info, const Expr *E);
@@ -1731,6 +1741,11 @@ namespace {
     void addComplex(EvalInfo &Info, const Expr *E, QualType EltTy, bool Imag) {
       if (checkSubobject(Info, E, Imag ? CSK_Imag : CSK_Real))
         Designator.addComplexUnchecked(EltTy, Imag);
+    }
+    void addVectorScalarElement(EvalInfo &Info, const Expr *E, QualType EltTy,
+                                uint64_t Elem) {
+      if (checkSubobject(Info, E, CSK_Vector))
+        Designator.addVectorScalarElementUnchecked(EltTy, Elem);
     }
     void clearIsNullPointer() {
       IsNullPtr = false;
@@ -3718,7 +3733,8 @@ findSubobject(EvalInfo &Info, const Expr *E, const CompleteObject &Obj,
     }
 
     // If this is our last pass, check that the final object type is OK.
-    if (I == N || (I == N - 1 && ObjType->isAnyComplexType())) {
+    if (I == N || (I == N - 1 && ObjType->isAnyComplexType()) ||
+        ObjType->isVectorType()) {
       // Accesses to volatile objects are prohibited.
       if (ObjType.isVolatileQualified() && isFormalAccess(handler.AccessKind)) {
         if (Info.getLangOpts().CPlusPlus) {
@@ -3823,6 +3839,28 @@ findSubobject(EvalInfo &Info, const Expr *E, const CompleteObject &Obj,
         return handler.found(Index ? O->getComplexFloatImag()
                                    : O->getComplexFloatReal(), ObjType);
       }
+    } else if (ObjType->isVectorType()) {
+      // Next subobject is a scalar.
+      // fixme but what about swizzles?
+      assert(O->isVector());
+      uint64_t Index = Sub.Entries[I].getAsArrayIndex();
+      // oh my, do we dare overload the path -> "rest of the path after the
+      // vector is akshually the (single) designator"
+      assert(I == N - 1 && "extracting subobject of scalar?");
+
+      if (Index >= O->getVectorLength()) {
+        if (Info.getLangOpts().CPlusPlus11)
+          Info.FFDiag(E, diag::note_constexpr_access_past_end)
+              << handler.AccessKind;
+        else
+          Info.FFDiag(E);
+        return handler.failed();
+      }
+
+      ObjType = getSubobjectType(
+          ObjType, ObjType->castAs<VectorType>()->getElementType());
+
+      return handler.found(O->getVectorElt(Index), ObjType);
     } else if (const FieldDecl *Field = getAsField(Sub.Entries[I])) {
       if (Field->isMutable() &&
           !Obj.mayAccessMutableMembers(Info, handler.AccessKind)) {
@@ -8756,9 +8794,9 @@ bool LValueExprEvaluator::VisitMemberExpr(const MemberExpr *E) {
 }
 
 bool LValueExprEvaluator::VisitArraySubscriptExpr(const ArraySubscriptExpr *E) {
-  // FIXME: Deal with vectors as array subscript bases.
-  if (E->getBase()->getType()->isVectorType() ||
-      E->getBase()->getType()->isSveVLSBuiltinType())
+  const auto &BaseTy = E->getBase()->getType();
+  // FIXME: Deal with sve vectors as array subscript bases.
+  if (BaseTy->isSveVLSBuiltinType())
     return Error(E);
 
   APSInt Index;
@@ -8767,7 +8805,7 @@ bool LValueExprEvaluator::VisitArraySubscriptExpr(const ArraySubscriptExpr *E) {
   // C++17's rules require us to evaluate the LHS first, regardless of which
   // side is the base.
   for (const Expr *SubExpr : {E->getLHS(), E->getRHS()}) {
-    if (SubExpr == E->getBase() ? !evaluatePointer(SubExpr, Result)
+    if (SubExpr == E->getBase() ? !EvaluateLValue(SubExpr, Result, Info)
                                 : !EvaluateInteger(SubExpr, Index, Info)) {
       if (!Info.noteFailure())
         return false;
@@ -8775,8 +8813,18 @@ bool LValueExprEvaluator::VisitArraySubscriptExpr(const ArraySubscriptExpr *E) {
     }
   }
 
-  return Success &&
-         HandleLValueArrayAdjustment(Info, E, Result, E->getType(), Index);
+  if (!Success)
+    return false;
+
+  // A vector isn't a pointer the way an array is, so handle it differently
+  if (BaseTy->isVectorType()) {
+    const auto *VTy = BaseTy->castAs<VectorType>();
+    Result.addVectorScalarElement(Info, E, VTy->getElementType(),
+                                  Index.getExtValue());
+    return true;
+  }
+
+  return HandleLValueArrayAdjustment(Info, E, Result, E->getType(), Index);
 }
 
 bool LValueExprEvaluator::VisitUnaryDeref(const UnaryOperator *E) {
@@ -11385,7 +11433,7 @@ public:
   bool VisitSourceLocExpr(const SourceLocExpr *E);
   bool VisitConceptSpecializationExpr(const ConceptSpecializationExpr *E);
   bool VisitRequiresExpr(const RequiresExpr *E);
-  // FIXME: Missing: array subscript of vector, member of vector
+  // FIXME: Missing: array subscript of vector, member of vector ??
 };
 
 class FixedPointExprEvaluator
