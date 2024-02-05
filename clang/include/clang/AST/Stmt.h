@@ -92,6 +92,10 @@ public:
         first##BASE##Constant=FIRST##Class, last##BASE##Constant=LAST##Class
 #define ABSTRACT_STMT(STMT)
 #include "clang/AST/StmtNodes.inc"
+
+    ,
+    // fixme: do this properly
+    InterpVal
   };
 
   // Make vanilla 'new' and 'delete' illegal for Stmts.

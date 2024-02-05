@@ -856,9 +856,15 @@ namespace {
     /// we will evaluate.
     unsigned StepsLeft;
 
+    static bool InterpAllowed;
+
+    /// Enable the experimental new constant interpreter. If an expression is
+    /// not supported by the interpreter, an error is triggered. TODO[seth] ?
+    bool EnableNewConstInterp;
+
     /// Enable the experimental new constant interpreter. If an expression is
     /// not supported by the interpreter, an error is triggered.
-    bool EnableNewConstInterp;
+    unsigned InterpSkipsLeft = 0;
 
     /// BottomFrame - The frame in which evaluation started. This must be
     /// initialized after CurrentCall and CallStackDepth.
@@ -1014,7 +1020,8 @@ namespace {
         : Ctx(const_cast<ASTContext &>(C)), EvalStatus(S), CurrentCall(nullptr),
           CallStackDepth(0), NextCallIndex(1),
           StepsLeft(C.getLangOpts().ConstexprStepLimit),
-          EnableNewConstInterp(C.getLangOpts().EnableNewConstInterp),
+          EnableNewConstInterp(InterpAllowed &&
+                               C.getLangOpts().EnableNewConstInterp),
           BottomFrame(*this, SourceLocation(), /*Callee=*/nullptr,
                       /*This=*/nullptr,
                       /*CallExpr=*/nullptr, CallRef()),
@@ -1317,6 +1324,7 @@ namespace {
       operator uint64_t&() { return Info.ArrayInitIndex; }
     };
   };
+  bool EvalInfo::InterpAllowed = true;
 
   /// Object used to treat all foldable expressions as constant expressions.
   struct FoldConstant {
@@ -15794,6 +15802,13 @@ static bool EvaluateVoid(const Expr *E, EvalInfo &Info) {
 
 static bool Evaluate(APValue &Result, EvalInfo &Info, const Expr *E) {
   assert(!E->isValueDependent());
+  // short-circuit evaluation if we've already evaluated this value
+  // in the new Interp
+  if (auto Val = E->getInterpValue()) {
+    Result = *Val;
+    return true;
+  }
+
   // In C, function designators are not lvalues, but we evaluate them as if they
   // are.
   QualType T = E->getType();
@@ -16139,8 +16154,14 @@ static bool EvaluateDestruction(const ASTContext &Ctx, APValue::LValueBase Base,
   return true;
 }
 
+bool Expr::toggleInterp() {
+  // TODO[seth]: finish this thought? (XOR other)
+  return EvalInfo::InterpAllowed = !EvalInfo::InterpAllowed;
+}
+
 bool Expr::EvaluateAsConstantExpr(EvalResult &Result, const ASTContext &Ctx,
-                                  ConstantExprKind Kind) const {
+                                  ConstantExprKind Kind,
+                                  unsigned InterpSkips) const {
   assert(!isValueDependent() &&
          "Expression evaluator can't be called on a dependent expression.");
   bool IsConst;
@@ -16151,13 +16172,17 @@ bool Expr::EvaluateAsConstantExpr(EvalResult &Result, const ASTContext &Ctx,
   EvalInfo::EvaluationMode EM = EvalInfo::EM_ConstantExpression;
   EvalInfo Info(Ctx, Result, EM);
   Info.InConstantContext = true;
+  Info.InterpSkipsLeft =
+      InterpSkips; // TODO[seth] finish this thought? (XOR other)
 
-  if (Info.EnableNewConstInterp) {
+  if (Info.EnableNewConstInterp && Info.InterpSkipsLeft == 0) {
     if (!Info.Ctx.getInterpContext().evaluate(Info, this, Result.Val))
       return false;
     return CheckConstantExpression(Info, getExprLoc(),
                                    getStorageType(Ctx, this), Result.Val, Kind);
   }
+  if (Info.EnableNewConstInterp)
+    --Info.InterpSkipsLeft;
 
   // The type of the object we're initializing is 'const T' for a class NTTP.
   QualType T = getType();

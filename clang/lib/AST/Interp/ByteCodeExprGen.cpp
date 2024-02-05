@@ -13,8 +13,21 @@
 #include "Context.h"
 #include "Floating.h"
 #include "Function.h"
+#include "Interp/EvaluationResult.h"
 #include "PrimType.h"
 #include "Program.h"
+#include "clang/AST/APValue.h"
+#include "clang/AST/ASTContext.h"
+#include "clang/AST/ASTFwd.h"
+#include "clang/AST/Attr.h"
+#include "clang/AST/CurrentSourceLocExprScope.h"
+#include "clang/AST/DeclCXX.h"
+#include "clang/AST/Expr.h"
+#include "clang/Basic/Builtins.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/ErrorHandling.h"
+#include <cassert>
+#include <optional>
 
 using namespace clang;
 using namespace clang::interp;
@@ -317,6 +330,63 @@ bool ByteCodeExprGen<Emitter>::VisitCastExpr(const CastExpr *CE) {
     if (!this->visitZeroInitializer(T, SubExpr->getType(), SubExpr))
       return false;
     return this->emitInitElem(T, 1, SubExpr);
+  }
+
+  case CK_LValueToRValueBitCast: {
+    // TODO[seth]: this works directly iff SubExpr is "hermetic" or
+    // self-contained or w/e but checking that property is probably ~as
+    // expensive as evaluating the subexpr
+#if 0
+      Expr::EvalResult R;
+      assert(!Expr::toggleInterp());
+      // TODO[seth]: don't lose R's notes?
+      if (!CE->EvaluateAsConstantExpr(
+              R, Ctx.getASTContext(),
+              // TODO[seth]: ok, now how to defer this when it's not immediate ?
+              ConstantExprKind::ImmediateInvocation, -1)) {
+        assert(Expr::toggleInterp());
+        return false;
+      }
+      assert(Expr::toggleInterp());
+
+      // TODO[seth]: clean up for R?
+      return this->visitAPValue(R.Val, CE);
+    }
+#endif
+
+    const auto *OrigBCE = cast<BuiltinBitCastExpr>(CE);
+    auto Res = [&]() -> EvaluationResult {
+      if constexpr (std::is_same<Emitter, EvalEmitter>::value) {
+        return this->interpretExpr(SubExpr);
+      }
+      assert(false && "todo: invent an ExprCall opcode or something");
+    }();
+    if (Res.isInvalid())
+      return false;
+
+    APValueExpr InterpExpr(Res.toAPValue(), SubExpr);
+    BuiltinBitCastExpr BCE(OrigBCE->getType() /* or getTypeAsWritten() ?*/,
+                           OrigBCE->getValueKind(), OrigBCE->getCastKind(),
+                           nullptr, OrigBCE->getTypeInfoAsWritten(),
+                           OrigBCE->getBeginLoc(), OrigBCE->getEndLoc());
+    // fixme: separated out because this way we don't "compute dependence" and
+    // that requires me to have created APValueExpr properly
+    BCE.setSubExpr(&InterpExpr);
+
+    Expr::EvalResult R;
+    assert(!Expr::toggleInterp());
+    // TODO[seth]: don't lose R's notes?
+    if (!CE->EvaluateAsConstantExpr(
+            R, Ctx.getASTContext(),
+            // TODO[seth]: ok, now how to defer this when it's not immediate ?
+            ConstantExprKind::ImmediateInvocation, -1)) {
+      assert(Expr::toggleInterp());
+      return false;
+    }
+    assert(Expr::toggleInterp());
+
+    // TODO[seth]: clean up for R?
+    return this->visitAPValue(R.Val, CE);
   }
 
   case CK_IntegralComplexCast:
@@ -2615,6 +2685,68 @@ bool ByteCodeExprGen<Emitter>::visitAPValue(const APValue &Val,
   }
 
   return false;
+}
+
+template <class Emitter>
+bool ByteCodeExprGen<Emitter>::visitAPValue(const APValue &Val, const Expr *E) {
+  assert(!DiscardResult);
+  assert(!E->containsErrors());
+
+  switch (Val.getKind()) {
+  case APValue::None:
+    llvm_unreachable("tried to push None onto the stack?");
+  case APValue::Indeterminate:
+    return false;
+
+  case APValue::Int:
+  case APValue::Float:
+    return visitAPValue(Val, classifyPrim(E->getType()), E);
+
+  case APValue::LValue:
+    assert(false && "todo: APValue::LValue");
+
+  case APValue::Array:
+  case APValue::Union:
+    assert(false && "todo");
+
+  case APValue::Struct: {
+    OptionScope<Emitter> Scope(this, /*NewDiscardResult=*/false,
+                               /*NewInitializing=*/true);
+    const Record *R = getRecord(E->getType());
+    assert(R);
+    assert(R->getNumBases() == 0 && "todo: recur (bases)");
+
+    auto Fields = R->fields();
+    unsigned FieldIdx = 0;
+    for (auto I = Fields.begin(), FE = Fields.end(); I != FE; I++, FieldIdx++) {
+      const Record::Field &Field = *I;
+      const Descriptor *D = Field.Desc;
+      assert(D->isPrimitive() && "todo: recur");
+
+      const PrimType T = classifyPrim(D->getType());
+      if (!visitAPValue(Val.getStructField(FieldIdx), T, E))
+        return false; // TODO[seth]: why is my field value None?
+
+      {
+        bool OK = this->emitInitField(T, Field.Offset, E);
+        assert(OK);
+      }
+    }
+
+    return true;
+  }
+
+  case APValue::Vector:
+  case APValue::FixedPoint:
+  case APValue::ComplexInt:
+  case APValue::ComplexFloat:
+    assert(false && "todo");
+
+  case APValue::MemberPointer:
+  case APValue::AddrLabelDiff:
+    assert(false && "todo");
+  }
+  llvm_unreachable("Unhandled APValue::ValueKind");
 }
 
 template <class Emitter>

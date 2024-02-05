@@ -139,6 +139,9 @@ protected:
   friend class ASTStmtReader; // Sets dependence directly.
 
 public:
+  static bool toggleInterp();
+  const std::optional<APValue> getInterpValue() const;
+
   QualType getType() const { return TR; }
   void setType(QualType t) {
     // In C++, the type of an expression is always adjusted so that it
@@ -749,9 +752,9 @@ public:
 
   /// Evaluate an expression that is required to be a constant expression. Does
   /// not check the syntactic constraints for C and C++98 constant expressions.
-  bool EvaluateAsConstantExpr(
-      EvalResult &Result, const ASTContext &Ctx,
-      ConstantExprKind Kind = ConstantExprKind::Normal) const;
+  bool EvaluateAsConstantExpr(EvalResult &Result, const ASTContext &Ctx,
+                              ConstantExprKind Kind = ConstantExprKind::Normal,
+                              unsigned InterpSkips = 0) const;
 
   /// If the current Expr is a pointer, this will try to statically
   /// determine the number of bytes available where the pointer is pointing.
@@ -6649,6 +6652,21 @@ private:
   friend class ASTStmtReader;
   friend class ASTStmtWriter;
 };
+
+struct APValueExpr : public Expr {
+  const APValue Val;
+  const Expr *OrigExpr;
+
+  APValueExpr(const APValue &&Val, const Expr *OrigExpr)
+      : Expr(InterpVal, EmptyShell{}), Val(Val), OrigExpr(OrigExpr){};
+};
+
+inline const std::optional<APValue> Expr::getInterpValue() const {
+  if (getStmtClass() == InterpVal) {
+    return reinterpret_cast<const APValueExpr *>(this)->Val;
+  }
+  return std::nullopt;
+}
 
 } // end namespace clang
 
