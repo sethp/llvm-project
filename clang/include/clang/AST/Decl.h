@@ -741,7 +741,7 @@ public:
 // ValueDecl. Verify that we got it right.
 static_assert(llvm::PointerLikeTypeTraits<ValueDecl *>::NumLowBitsAvailable <=
                   llvm::detail::ConstantLog2<alignof(ValueDecl)>::value,
-              "PointerLikeTypeTraits<Expr*> assumes too much alignment.");
+              "PointerLikeTypeTraits<ValueDecl *> assumes too much alignment.");
 
 /// A struct with extended info about a syntactic
 /// name qualifier, to be used for the case of out-of-line declarations.

@@ -503,7 +503,7 @@ inline llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, const Pointer &P) {
 // Pointer. Verify that we got it right.
 static_assert(llvm::PointerLikeTypeTraits<Pointer *>::NumLowBitsAvailable <=
                   llvm::detail::ConstantLog2<alignof(Pointer)>::value,
-              "PointerLikeTypeTraits<Expr*> assumes too much alignment.");
+              "PointerLikeTypeTraits<Pointer *> assumes too much alignment.");
 
 } // namespace interp
 } // namespace clang
