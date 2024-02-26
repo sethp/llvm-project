@@ -35,6 +35,7 @@
 #include "ExprConstShared.h"
 #include "Interp/Context.h"
 #include "Interp/Frame.h"
+#include "Interp/Pointer.h"
 #include "Interp/State.h"
 #include "clang/AST/APValue.h"
 #include "clang/AST/ASTContext.h"
@@ -52,6 +53,7 @@
 #include "clang/AST/TypeLoc.h"
 #include "clang/Basic/Builtins.h"
 #include "clang/Basic/DiagnosticAST.h"
+#include "clang/Basic/LLVM.h"
 #include "clang/Basic/TargetInfo.h"
 #include "llvm/ADT/APFixedPoint.h"
 #include "llvm/ADT/APInt.h"
@@ -2084,6 +2086,7 @@ static bool IsGlobalLValue(APValue::LValueBase B) {
     return isa<FunctionDecl, MSGuidDecl, UnnamedGlobalConstantDecl>(D);
   }
 
+  // TODO[seth]: what about interp::Pointer ?
   if (B.is<TypeInfoLValue>() || B.is<DynamicAllocLValue>())
     return true;
 
@@ -2234,6 +2237,7 @@ static bool CheckLValueConstantExpression(EvalInfo &Info, SourceLocation Loc,
   APValue::LValueBase Base = LVal.getLValueBase();
   const SubobjectDesignator &Designator = LVal.getLValueDesignator();
 
+  // TODO[seth]: what about interp::Pointer?
   const Expr *BaseE = Base.dyn_cast<const Expr *>();
   const ValueDecl *BaseVD = Base.dyn_cast<const ValueDecl*>();
 
@@ -2243,6 +2247,7 @@ static bool CheckLValueConstantExpression(EvalInfo &Info, SourceLocation Loc,
   if (isTemplateArgument(Kind)) {
     int InvalidBaseKind = -1;
     StringRef Ident;
+    // TODO[seth]: what about interp::Pointer?
     if (Base.is<TypeInfoLValue>())
       InvalidBaseKind = 0;
     else if (isa_and_nonnull<StringLiteral>(BaseE))
@@ -3595,6 +3600,7 @@ static bool diagnoseMutableFields(EvalInfo &Info, const Expr *E, AccessKinds AK,
 static bool lifetimeStartedInEvaluation(EvalInfo &Info,
                                         APValue::LValueBase Base,
                                         bool MutableSubobject = false) {
+  // TODO[seth]: what about interp::Pointer?
   // A temporary or transient heap allocation we created.
   if (Base.getCallIndex() || Base.is<DynamicAllocLValue>())
     return true;
@@ -4224,12 +4230,17 @@ static CompleteObject findCompleteObject(EvalInfo &Info, const Expr *E,
     }
     return CompleteObject(LVal.Base, &(*Alloc)->Value,
                           LVal.Base.getDynamicAllocType());
+  } else if (LVal.Base.is<const interp::Pointer *>()) {
+    return CompleteObject(
+        LVal.Base,
+        const_cast<APValue::LValueBase &>(LVal.Base).getInterpRVal(Info.Ctx),
+        BaseType);
   } else {
     const Expr *Base = LVal.Base.dyn_cast<const Expr*>();
 
     if (!Frame) {
       if (const MaterializeTemporaryExpr *MTE =
-              dyn_cast_or_null<MaterializeTemporaryExpr>(Base)) {
+              dyn_cast_if_present<MaterializeTemporaryExpr>(Base)) {
         assert(MTE->getStorageDuration() == SD_Static &&
                "should have a frame for a non-global materialized temporary");
 
@@ -7711,9 +7722,6 @@ class BufferToAPValueConverter {
       for (size_t I = 0, E = CXXRD->getNumBases(); I != E; ++I) {
         const CXXBaseSpecifier &BS = CXXRD->bases_begin()[I];
         CXXRecordDecl *BaseDecl = BS.getType()->getAsCXXRecordDecl();
-        if (BaseDecl->isEmpty() ||
-            Info.Ctx.getASTRecordLayout(BaseDecl).getNonVirtualSize().isZero())
-          continue;
 
         std::optional<APValue> SubObj = visitType(
             BS.getType(), Layout.getBaseClassOffset(BaseDecl) + Offset);
@@ -12191,6 +12199,7 @@ static bool EvaluateBuiltinConstantPForLValue(const APValue &LV) {
       return false;
     return LV.getLValueOffset().isZero();
   } else if (Base.is<TypeInfoLValue>()) {
+    // TODO[seth]: what about interp::Pointer?
     // Surprisingly, GCC considers __builtin_constant_p(&typeid(int)) to
     // evaluate to true.
     return true;
@@ -12258,11 +12267,8 @@ static QualType getObjectType(APValue::LValueBase B) {
   } else if (const Expr *E = B.dyn_cast<const Expr*>()) {
     if (isa<CompoundLiteralExpr>(E))
       return E->getType();
-  } else if (B.is<TypeInfoLValue>()) {
-    return B.getTypeInfoType();
-  } else if (B.is<DynamicAllocLValue>()) {
-    return B.getDynamicAllocType();
-  }
+  } else
+    return B.getType();
 
   return QualType();
 }
@@ -15802,12 +15808,6 @@ static bool EvaluateVoid(const Expr *E, EvalInfo &Info) {
 
 static bool Evaluate(APValue &Result, EvalInfo &Info, const Expr *E) {
   assert(!E->isValueDependent());
-  // short-circuit evaluation if we've already evaluated this value
-  // in the new Interp
-  if (auto Val = E->getInterpValue()) {
-    Result = *Val;
-    return true;
-  }
 
   // In C, function designators are not lvalues, but we evaluate them as if they
   // are.

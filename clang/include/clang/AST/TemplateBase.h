@@ -38,13 +38,14 @@ class FoldingSetNodeID;
 // Provide PointerLikeTypeTraits for clang::Expr*, this default one requires a
 // full definition of Expr, but this file only sees a forward del because of
 // the dependency.
-template <> struct PointerLikeTypeTraits<clang::Expr *> {
-  static inline void *getAsVoidPointer(clang::Expr *P) { return P; }
-  static inline clang::Expr *getFromVoidPointer(void *P) {
-    return static_cast<clang::Expr *>(P);
-  }
-  static constexpr int NumLowBitsAvailable = 2;
-};
+// template <> struct PointerLikeTypeTraits<clang::Expr *> {
+//   static inline void *getAsVoidPointer(clang::Expr *P) { return P; }
+//   static inline clang::Expr *getFromVoidPointer(void *P) {
+//     return static_cast<clang::Expr *>(P);
+//   }
+//   static constexpr int NumLowBitsAvailable = 3; // TODO[seth]: does this
+//   matter?
+// };
 
 } // namespace llvm
 

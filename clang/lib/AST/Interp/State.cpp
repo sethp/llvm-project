@@ -67,7 +67,7 @@ OptionalDiagnostic State::Note(SourceLocation Loc, diag::kind DiagId) {
 }
 
 void State::addNotes(ArrayRef<PartialDiagnosticAt> Diags) {
-  if (hasActiveDiagnostic()) {
+  if (hasActiveDiagnostic() && getEvalStatus().Diag) {
     getEvalStatus().Diag->insert(getEvalStatus().Diag->end(), Diags.begin(),
                                  Diags.end());
   }

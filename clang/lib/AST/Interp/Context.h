@@ -73,6 +73,8 @@ public:
   /// Classifies a type.
   std::optional<PrimType> classify(QualType T) const;
 
+  static std::optional<PrimType> classify(QualType T, const ASTContext &Ctx);
+
   /// Classifies an expression.
   std::optional<PrimType> classify(const Expr *E) const {
     if (E->isGLValue()) {
@@ -84,38 +86,38 @@ public:
     return classify(E->getType());
   }
 
-  const CXXMethodDecl *
-  getOverridingFunction(const CXXRecordDecl *DynamicDecl,
-                        const CXXRecordDecl *StaticDecl,
-                        const CXXMethodDecl *InitialFunction) const;
+    const CXXMethodDecl *
+    getOverridingFunction(const CXXRecordDecl *DynamicDecl,
+                          const CXXRecordDecl *StaticDecl,
+                          const CXXMethodDecl *InitialFunction) const;
 
-  const Function *getOrCreateFunction(const FunctionDecl *FD);
+    const Function *getOrCreateFunction(const FunctionDecl *FD);
 
-  /// Returns whether we should create a global variable for the
-  /// given ValueDecl.
-  static bool shouldBeGloballyIndexed(const ValueDecl *VD) {
-    if (const auto *V = dyn_cast<VarDecl>(VD))
-      return V->hasGlobalStorage() || V->isConstexpr();
+    /// Returns whether we should create a global variable for the
+    /// given ValueDecl.
+    static bool shouldBeGloballyIndexed(const ValueDecl *VD) {
+      if (const auto *V = dyn_cast<VarDecl>(VD))
+        return V->hasGlobalStorage() || V->isConstexpr();
 
-    return false;
-  }
+      return false;
+    }
 
-  /// Returns the program. This is only needed for unittests.
-  Program &getProgram() const { return *P.get(); }
+    /// Returns the program. This is only needed for unittests.
+    Program &getProgram() const { return *P.get(); }
 
-private:
-  /// Runs a function.
-  bool Run(State &Parent, const Function *Func, APValue &Result);
+  private:
+    /// Runs a function.
+    bool Run(State &Parent, const Function *Func, APValue &Result);
 
-  /// Checks a result from the interpreter.
-  bool Check(State &Parent, llvm::Expected<bool> &&R);
+    /// Checks a result from the interpreter.
+    bool Check(State &Parent, llvm::Expected<bool> &&R);
 
-  /// Current compilation context.
-  ASTContext &Ctx;
-  /// Interpreter stack, shared across invocations.
-  InterpStack Stk;
-  /// Constexpr program.
-  std::unique_ptr<Program> P;
+    /// Current compilation context.
+    ASTContext &Ctx;
+    /// Interpreter stack, shared across invocations.
+    InterpStack Stk;
+    /// Constexpr program.
+    std::unique_ptr<Program> P;
 };
 
 } // namespace interp

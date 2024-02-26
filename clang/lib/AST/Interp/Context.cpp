@@ -17,6 +17,7 @@
 #include "InterpStack.h"
 #include "PrimType.h"
 #include "Program.h"
+#include "clang/AST/ASTContext.h"
 #include "clang/AST/Expr.h"
 #include "clang/Basic/TargetInfo.h"
 
@@ -133,7 +134,7 @@ bool Context::evaluateAsInitializer(State &Parent, const VarDecl *VD,
 
 const LangOptions &Context::getLangOpts() const { return Ctx.getLangOpts(); }
 
-std::optional<PrimType> Context::classify(QualType T) const {
+std::optional<PrimType> Context::classify(QualType T, const ASTContext &Ctx) {
   if (T->isBooleanType())
     return PT_Bool;
 
@@ -184,15 +185,19 @@ std::optional<PrimType> Context::classify(QualType T) const {
     return PT_Ptr;
 
   if (const auto *AT = dyn_cast<AtomicType>(T))
-    return classify(AT->getValueType());
+    return classify(AT->getValueType(), Ctx);
 
   if (const auto *DT = dyn_cast<DecltypeType>(T))
-    return classify(DT->getUnderlyingType());
+    return classify(DT->getUnderlyingType(), Ctx);
 
   if (const auto *DT = dyn_cast<MemberPointerType>(T))
-    return classify(DT->getPointeeType());
+    return classify(DT->getPointeeType(), Ctx);
 
   return std::nullopt;
+}
+
+std::optional<PrimType> Context::classify(QualType T) const {
+  return Context::classify(T, getASTContext());
 }
 
 unsigned Context::getCharBit() const {

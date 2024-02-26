@@ -6654,17 +6654,44 @@ private:
 };
 
 struct APValueExpr : public Expr {
-  const APValue Val;
+  const APValue &Val;
   const Expr *OrigExpr;
 
-  APValueExpr(const APValue &&Val, const Expr *OrigExpr)
-      : Expr(InterpVal, EmptyShell{}), Val(Val), OrigExpr(OrigExpr){};
+  APValueExpr(const APValue &Val, const Expr *OrigExpr)
+      : Expr(/*APValueExprClass*/ NoStmtClass, EmptyShell{}), Val(Val),
+        OrigExpr(OrigExpr) {
+    setDependence(OrigExpr->getDependence());
+  };
+
+  SourceLocation getBeginLoc() const LLVM_READONLY {
+    return OrigExpr->getBeginLoc();
+  }
+  SourceLocation getEndLoc() const LLVM_READONLY {
+    return OrigExpr->getEndLoc();
+  }
+
+  // Iterators
+  // TODO: or do we delegate to orig expr?
+
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
+
+  const_child_range children() const {
+    return const_child_range(const_child_iterator(), const_child_iterator());
+  }
+
+  // child_range children() { return child_range(); }
+  // const_child_range children() const { return const_child_range(&Op, &Op +
+  // 1); }
+
+  // TODO: override dump() to make it clear this is an already-interpreted value
 };
 
 inline const std::optional<APValue> Expr::getInterpValue() const {
-  if (getStmtClass() == InterpVal) {
-    return reinterpret_cast<const APValueExpr *>(this)->Val;
-  }
+  // if (getStmtClass() == APValueExprClass) {
+  //   return reinterpret_cast<const APValueExpr *>(this)->Val;
+  // }
   return std::nullopt;
 }
 

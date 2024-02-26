@@ -233,7 +233,7 @@ bool Pointer::hasSameArray(const Pointer &A, const Pointer &B) {
   return hasSameBase(A, B) && A.Base == B.Base && A.getFieldDesc()->IsArray;
 }
 
-std::optional<APValue> Pointer::toRValue(const Context &Ctx) const {
+std::optional<APValue> Pointer::toRValue(const ASTContext &Ctx) const {
   // Method to recursively traverse composites.
   std::function<bool(QualType, const Pointer &, APValue &)> Composite;
   Composite = [&Composite, &Ctx](QualType Ty, const Pointer &Ptr, APValue &R) {
@@ -246,7 +246,7 @@ std::optional<APValue> Pointer::toRValue(const Context &Ctx) const {
       return false;
 
     // Primitive values.
-    if (std::optional<PrimType> T = Ctx.classify(Ty)) {
+    if (std::optional<PrimType> T = Context::classify(Ty, Ctx)) {
       if (T == PT_Ptr || T == PT_FnPtr) {
         R = Ptr.toAPValue();
       } else {
@@ -267,7 +267,7 @@ std::optional<APValue> Pointer::toRValue(const Context &Ctx) const {
           const Pointer &FP = Ptr.atField(F.Offset);
           QualType FieldTy = F.Decl->getType();
           if (FP.isActive()) {
-            if (std::optional<PrimType> T = Ctx.classify(FieldTy)) {
+            if (std::optional<PrimType> T = Context::classify(FieldTy, Ctx)) {
               TYPE_SWITCH(*T, Value = FP.deref<T>().toAPValue());
             } else {
               Ok &= Composite(FieldTy, FP, Value);
@@ -289,7 +289,7 @@ std::optional<APValue> Pointer::toRValue(const Context &Ctx) const {
           const Pointer &FP = Ptr.atField(FD->Offset);
           APValue &Value = R.getStructField(I);
 
-          if (std::optional<PrimType> T = Ctx.classify(FieldTy)) {
+          if (std::optional<PrimType> T = Context::classify(FieldTy, Ctx)) {
             TYPE_SWITCH(*T, Value = FP.deref<T>().toAPValue());
           } else {
             Ok &= Composite(FieldTy, FP, Value);
@@ -298,14 +298,14 @@ std::optional<APValue> Pointer::toRValue(const Context &Ctx) const {
 
         for (unsigned I = 0; I < NB; ++I) {
           const Record::Base *BD = Record->getBase(I);
-          QualType BaseTy = Ctx.getASTContext().getRecordType(BD->Decl);
+          QualType BaseTy = Ctx.getRecordType(BD->Decl);
           const Pointer &BP = Ptr.atField(BD->Offset);
           Ok &= Composite(BaseTy, BP, R.getStructBase(I));
         }
 
         for (unsigned I = 0; I < NV; ++I) {
           const Record::Base *VD = Record->getVirtualBase(I);
-          QualType VirtBaseTy = Ctx.getASTContext().getRecordType(VD->Decl);
+          QualType VirtBaseTy = Ctx.getRecordType(VD->Decl);
           const Pointer &VP = Ptr.atField(VD->Offset);
           Ok &= Composite(VirtBaseTy, VP, R.getStructBase(NB + I));
         }
@@ -327,7 +327,7 @@ std::optional<APValue> Pointer::toRValue(const Context &Ctx) const {
       for (unsigned I = 0; I < NumElems; ++I) {
         APValue &Slot = R.getArrayInitializedElt(I);
         const Pointer &EP = Ptr.atIndex(I);
-        if (std::optional<PrimType> T = Ctx.classify(ElemTy)) {
+        if (std::optional<PrimType> T = Context::classify(ElemTy, Ctx)) {
           TYPE_SWITCH(*T, Slot = EP.deref<T>().toAPValue());
         } else {
           Ok &= Composite(ElemTy, EP.narrow(), Slot);
@@ -339,7 +339,7 @@ std::optional<APValue> Pointer::toRValue(const Context &Ctx) const {
     // Complex types.
     if (const auto *CT = Ty->getAs<ComplexType>()) {
       QualType ElemTy = CT->getElementType();
-      std::optional<PrimType> ElemT = Ctx.classify(ElemTy);
+      std::optional<PrimType> ElemT = Context::classify(ElemTy, Ctx);
       assert(ElemT);
 
       if (ElemTy->isIntegerType()) {
@@ -372,4 +372,9 @@ std::optional<APValue> Pointer::toRValue(const Context &Ctx) const {
   if (!Composite(getType(), *this, Result))
     return std::nullopt;
   return Result;
+}
+
+void Pointer::dump() const {
+  llvm::errs() << "interp::Pointer -> ";
+  getType().dump();
 }

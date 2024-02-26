@@ -13,17 +13,25 @@
 #include "Context.h"
 #include "Floating.h"
 #include "Function.h"
+#include "Interp/Boolean.h"
+#include "Interp/Descriptor.h"
 #include "Interp/EvaluationResult.h"
+#include "Interp/Integral.h"
 #include "PrimType.h"
 #include "Program.h"
 #include "clang/AST/APValue.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTFwd.h"
 #include "clang/AST/Attr.h"
+#include "clang/AST/ComputeDependence.h"
 #include "clang/AST/CurrentSourceLocExprScope.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/Expr.h"
+#include "clang/AST/OperationKinds.h"
+#include "clang/AST/Stmt.h"
+#include "clang/AST/Type.h"
 #include "clang/Basic/Builtins.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <cassert>
@@ -179,6 +187,42 @@ bool ByteCodeExprGen<Emitter>::VisitCastExpr(const CastExpr *CE) {
       return true;
     return this->emitNull(classifyPrim(CE->getType()), CE);
 
+  case CK_NullToMemberPointer: {
+
+    // // 'Base.Member'
+    // const Expr *Base = CE->getBase();
+
+    // if (DiscardResult)
+    //   return this->discard(Base);
+
+    // if (!this->delegate(Base))
+    //   return false;
+
+    // // Base above gives us a pointer on the stack.
+    // // TODO: Implement non-FieldDecl members.
+    // const ValueDecl *Member = E->getMemberDecl();
+    // if (const auto *FD = dyn_cast<FieldDecl>(Member)) {
+    //   const RecordDecl *RD = FD->getParent();
+    //   const Record *R = getRecord(RD);
+    //   const Record::Field *F = R->getField(FD);
+    //   // Leave a pointer to the field on the stack.
+    //   if (F->Decl->getType()->isReferenceType())
+    //     return this->emitGetFieldPop(PT_Ptr, F->Offset, E);
+    //   return this->emitGetPtrField(F->Offset, E);
+    // }
+
+    // TODO[seth]: I think this is incomplete; is it OK to do this when we're
+    // initializing?
+    //
+    // cf. `MemberPointerExprEvaluator::VisitCastExpr`
+    return false;
+
+    // if (DiscardResult)
+    //   return true;
+
+    // return this->emitNull(classifyPrim(CE->getType()), CE);
+  }
+
   case CK_PointerToIntegral: {
     // TODO: Discard handling.
     if (!this->visit(SubExpr))
@@ -332,63 +376,6 @@ bool ByteCodeExprGen<Emitter>::VisitCastExpr(const CastExpr *CE) {
     return this->emitInitElem(T, 1, SubExpr);
   }
 
-  case CK_LValueToRValueBitCast: {
-    // TODO[seth]: this works directly iff SubExpr is "hermetic" or
-    // self-contained or w/e but checking that property is probably ~as
-    // expensive as evaluating the subexpr
-#if 0
-      Expr::EvalResult R;
-      assert(!Expr::toggleInterp());
-      // TODO[seth]: don't lose R's notes?
-      if (!CE->EvaluateAsConstantExpr(
-              R, Ctx.getASTContext(),
-              // TODO[seth]: ok, now how to defer this when it's not immediate ?
-              ConstantExprKind::ImmediateInvocation, -1)) {
-        assert(Expr::toggleInterp());
-        return false;
-      }
-      assert(Expr::toggleInterp());
-
-      // TODO[seth]: clean up for R?
-      return this->visitAPValue(R.Val, CE);
-    }
-#endif
-
-    const auto *OrigBCE = cast<BuiltinBitCastExpr>(CE);
-    auto Res = [&]() -> EvaluationResult {
-      if constexpr (std::is_same<Emitter, EvalEmitter>::value) {
-        return this->interpretExpr(SubExpr);
-      }
-      assert(false && "todo: invent an ExprCall opcode or something");
-    }();
-    if (Res.isInvalid())
-      return false;
-
-    APValueExpr InterpExpr(Res.toAPValue(), SubExpr);
-    BuiltinBitCastExpr BCE(OrigBCE->getType() /* or getTypeAsWritten() ?*/,
-                           OrigBCE->getValueKind(), OrigBCE->getCastKind(),
-                           nullptr, OrigBCE->getTypeInfoAsWritten(),
-                           OrigBCE->getBeginLoc(), OrigBCE->getEndLoc());
-    // fixme: separated out because this way we don't "compute dependence" and
-    // that requires me to have created APValueExpr properly
-    BCE.setSubExpr(&InterpExpr);
-
-    Expr::EvalResult R;
-    assert(!Expr::toggleInterp());
-    // TODO[seth]: don't lose R's notes?
-    if (!CE->EvaluateAsConstantExpr(
-            R, Ctx.getASTContext(),
-            // TODO[seth]: ok, now how to defer this when it's not immediate ?
-            ConstantExprKind::ImmediateInvocation, -1)) {
-      assert(Expr::toggleInterp());
-      return false;
-    }
-    assert(Expr::toggleInterp());
-
-    // TODO[seth]: clean up for R?
-    return this->visitAPValue(R.Val, CE);
-  }
-
   case CK_IntegralComplexCast:
   case CK_FloatingComplexCast:
   case CK_IntegralComplexToFloatingComplex:
@@ -448,6 +435,301 @@ bool ByteCodeExprGen<Emitter>::VisitCastExpr(const CastExpr *CE) {
 
   case CK_ToVoid:
     return discard(SubExpr);
+
+  case CK_LValueToRValueBitCast: {
+    // TODO[seth]: this works directly iff SubExpr is "hermetic"
+    // (self-contained, doesn't touch other Interp state) but checking that
+    // property is probably ~as expensive as evaluating the subexpr ?
+#if 0
+      Expr::EvalResult R;
+      assert(!Expr::toggleInterp());
+      // TODO[seth]: don't lose R's notes?
+      if (!CE->EvaluateAsConstantExpr(
+              R, Ctx.getASTContext(),
+              // TODO[seth]: ok, now how to defer this when it's not immediate ?
+              ConstantExprKind::ImmediateInvocation, -1)) {
+        assert(Expr::toggleInterp());
+        return false;
+      }
+      assert(Expr::toggleInterp());
+
+      // TODO[seth]: clean up for R?
+      return this->visitAPValue(R.Val, CE);
+    }
+#endif
+
+#if 0
+    auto Res = [&]() -> std::optional<APValue> {
+      if constexpr (std::is_same<Emitter, EvalEmitter>::value) {
+        // this->interpretExpr(SubExpr);
+        // ^ this messes up the (single) state of the EvaluationResult
+        //
+        // v so we simulate it (via ::visitExpr) instead...
+        assert(!SubExpr->getType()->isVoidType());
+
+        const auto &S = this->getState();
+
+        // ... a la ::emitRet
+        if (std::optional<PrimType> T = classify(SubExpr)) {
+          if (!visit(SubExpr))
+            return std::nullopt;
+          switch (*T) {
+          case PT_Ptr:
+            // return S.Stk.template pop<Pointer>().toRValue(S.getCtx());
+            return S.Stk.template pop<Pointer>().toAPValue();
+
+          // case PT_Bool:
+          //   return S.Stk.template pop<PrimConv<PT_Bool>::T>().toAPValue();
+          default:
+            assert(false && "todo: prim type");
+          }
+          llvm_unreachable("unhandled prim type");
+        }
+
+        // ... a la ::emitRetValue
+        std::optional<unsigned> LocalOffset = this->allocateLocal(SubExpr);
+        if (!LocalOffset)
+          return std::nullopt;
+        if (!this->visitLocalInitializer(SubExpr, *LocalOffset))
+          return std::nullopt;
+        if (!this->emitGetPtrLocal(*LocalOffset, SubExpr))
+          return std::nullopt;
+        const auto &Ptr = S.Stk.template pop<Pointer>();
+        // return Ptr.toRValue(S.getCtx());
+        return Ptr.toAPValue();
+      }
+      assert(false && "todo: invent an ExprCall opcode or something");
+    }();
+    if (!Res) {
+      return false;
+    }
+
+#elif 0
+    auto Res = [&]() -> std::optional<interp::Pointer> {
+      if constexpr (std::is_same<Emitter, EvalEmitter>::value) {
+        // this->interpretExpr(SubExpr);
+        // ^ this messes up the (single) state of the EvaluationResult
+        //
+        //   so we simulate it (as with ::visitExpr)
+        // v but we don't want to emit `ret`s
+        assert(!SubExpr->getType()->isVoidType());
+
+        const auto &S = this->getState();
+
+        // ... a la ::emitRet
+        if (std::optional<PrimType> T = classify(SubExpr)) {
+          if (!visit(SubExpr))
+            return std::nullopt;
+          switch (*T) {
+          case PT_Ptr:
+            // return S.Stk.template pop<Pointer>().toRValue(S.getCtx());
+            return S.Stk.template pop<Pointer>();
+
+          // case PT_Bool:
+          //   return S.Stk.template pop<PrimConv<PT_Bool>::T>().toAPValue();
+          default:
+            assert(false && "todo: prim type");
+          }
+          llvm_unreachable("unhandled prim type");
+        }
+
+        // ... a la ::emitRetValue
+        std::optional<unsigned> LocalOffset = this->allocateLocal(SubExpr);
+        if (!LocalOffset)
+          return std::nullopt;
+        if (!this->visitLocalInitializer(SubExpr, *LocalOffset))
+          return std::nullopt;
+        if (!this->emitGetPtrLocal(*LocalOffset, SubExpr))
+          return std::nullopt;
+        const auto &Ptr = S.Stk.template pop<Pointer>();
+        // return Ptr.toRValue(S.getCtx());
+        return Ptr;
+      }
+      assert(false && "todo: invent an ExprCall opcode or something");
+    }();
+    if (!Res) {
+      return false;
+    }
+
+    // TODO wrap this in   MaterializeTemporaryExpr ?
+    // (there's already an MTE in at least one case, should we try and re-use
+    // that?)
+
+    // this is more than a bit "sticky" for me; why? Is it specific to
+    // `xvalue`s? I really feel like replacing this expr chain with a
+    // ConstantExpr ought to work, but it does not because.... the "info" is
+    // not right? Or the APValue I'm memoizing isn't?
+    // ```
+    // MaterializeTemporaryExpr 0x55556b44ec70 'int' xvalue
+    // `-CStyleCastExpr 0x55556b44ec30 'int' <NoOp>
+    //   `-UnaryOperator 0x55556b44ec00 'int' prefix '-'
+    //     `-IntegerLiteral 0x55556b44ebe0 'int' 1
+    // ```
+
+    // ok, so roughly the problem is this:
+    //  - we have a temporary (`xvalue`) that needs to get
+    //    produced as an LValue, but
+    //  - it "looks" like it's escaping from the perspective of
+    //    ExprConstant (when we try and `EvaluateAsLValue`)
+    //  - and Interp has no way to mark it as a  "valid local" or
+    //    w/e, so `findCompleteObject` says "no es bueno"
+
+    interp::Pointer Ptr = *Res;
+    // TODO[seth]: ought this be something like Pointer::toLValue() or
+    // incorporated into toAPValue ?
+    auto Val = APValue(APValue::LValueBase::getInterpPtr(&Ptr),
+                       CharUnits::Zero(), {}, false, Ptr.isZero());
+
+    // TODO[seth]: where does this get cleaned up?
+    auto *InterpExpr = ConstantExpr::Create(Ctx.getASTContext(),
+                                            const_cast<Expr *>(SubExpr), Val);
+
+    // MaterializeTemporaryExpr MTE(SubExpr->getType(), InterpExpr,
+    //                              /*SubExpr->isLValue()*/ false);
+
+    // TODO[seth]: or const_cast  / setSubExpr ?
+    const auto *OrigBCE = cast<BuiltinBitCastExpr>(CE);
+    BuiltinBitCastExpr BCE(OrigBCE->getType(), OrigBCE->getValueKind(),
+                           OrigBCE->getCastKind(), InterpExpr,
+                           OrigBCE->getTypeInfoAsWritten(),
+                           OrigBCE->getBeginLoc(), OrigBCE->getEndLoc());
+
+    // TODO[seth]: or explicit copy as above ?
+    // const_cast<CastExpr *>(CE)->setSubExpr(InterpExpr);
+    struct Toggle {
+#ifdef NDEBUG
+#define always(v)                                                              \
+  { v; }
+#else
+#define always(v) assert(v)
+#endif
+      Toggle() { always(!Expr::toggleInterp()); }
+      ~Toggle() { always(Expr::toggleInterp()); }
+#undef always
+    };
+    SmallVector<PartialDiagnosticAt, 2> Notes;
+    Expr::EvalResult R;
+    R.Diag = &Notes;
+
+    const auto Eval = [this](const Expr *E, Expr::EvalResult &Result) {
+      Toggle InterpToggle;
+      auto &ASTCtx = Ctx.getASTContext();
+      switch (E->getValueKind()) {
+      case VK_PRValue:
+        return E->EvaluateAsRValue(Result, ASTCtx, true);
+      case VK_LValue:
+      case VK_XValue:
+        assert(E->isGLValue());
+        return E->EvaluateAsLValue(Result, ASTCtx, true);
+      default:
+        llvm_unreachable("unhandled ExprValueKind");
+      }
+    };
+    // if (!BCE.EvaluateAsConstantExpr(R, Ctx.getASTContext(),
+    // if (!CE->EvaluateAsConstantExpr(R, Ctx.getASTContext(),
+    //                                 ConstantExprKind::ImmediateInvocation,
+    //                                 -1)) {
+    if (!Eval(&BCE, R)) {
+      // APValue Check;
+      // APValue SubVal;
+      {
+        Expr::EvalResult R[2];
+        Toggle toggle;
+        assert(!CE->EvaluateAsRValue(R[0], Ctx.getASTContext(), true));
+        // Check = R[0].Val;
+        // this "works", but we need an LValue
+        // assert(SubExpr->EvaluateAsRValue(R[1], Ctx.getASTContext(), true));
+        // this bombs because we're letting the temporary "escape" (it's not a
+        // global)
+        // assert(SubExpr->EvaluateAsLValue(R[1], Ctx.getASTContext(),
+        // true));
+        // SubVal = R[1].Val;
+      }
+
+      // assert(SubVal.getLValueCallIndex());
+      // assert((*Res).getLValueCallIndex());
+      // assert(SubVal.getKind() == (*Res).getKind());
+      // assert(!Check.hasValue());
+      if constexpr (std::is_same<Emitter, EvalEmitter>::value) {
+        this->getState().setActiveDiagnostic(true);
+        this->getState().addNotes(Notes);
+      } else
+        assert(false &&
+               "todo: how do we emit diagnostics for AoT Interp bytecode?");
+      // TODO[seth]: look into Invalid opcode mentioned in
+      // https://www.redhat.com/en/blog/new-constant-expression-interpreter-clang-part-2
+      return false;
+    }
+
+    APValue Check;
+    APValue SubVal;
+    {
+      Expr::EvalResult R[2];
+      assert(!Expr::toggleInterp());
+      assert(CE->EvaluateAsRValue(R[0], Ctx.getASTContext(), true));
+      Check = R[0].Val;
+      // this "works", but we need an LValue
+      // assert(SubExpr->EvaluateAsRValue(R[1], Ctx.getASTContext(), true));
+      // this bombs because we're letting the temporary "escape" (it's not a
+      // global)
+      // assert(SubExpr->EvaluateAsLValue(R[1], Ctx.getASTContext(),
+      // true));
+      assert(Expr::toggleInterp());
+      // SubVal = R[1].Val;
+    }
+
+    // assert(SubVal.getLValueCallIndex());
+    // assert((*Res).getLValueCallIndex());
+    // assert(SubVal.getKind() == (*Res).getKind());
+    // TODO[seth] more in-depth checks
+    assert(Check.getKind() == R.Val.getKind());
+    switch (Check.getKind()) {
+    case APValue::None:
+      assert(R.Val.isAbsent());
+      break;
+    case APValue::Indeterminate:
+      assert(R.Val.isIndeterminate());
+      break;
+    // case APValue::Int: {
+    //   APSInt Result;
+    //   R.Val.getUnionValue()
+    //       assert(R.Val.toIntegralConstant(&Result, SrcTy, &Ctx));
+    //   break;
+    // }
+    case APValue::Int:
+    case APValue::Float:
+    case APValue::FixedPoint:
+    case APValue::ComplexInt:
+    case APValue::ComplexFloat:
+    case APValue::LValue:
+    case APValue::Vector:
+    case APValue::Array:
+    case APValue::Struct:
+    case APValue::Union:
+    case APValue::MemberPointer:
+    case APValue::AddrLabelDiff:
+      assert(!R.Val.isAbsent());
+      // assert(false && "todo: Check");
+      break;
+    }
+    // TODO[seth]: cleanup for R.Val?
+    return this->visitAPValue(R.Val, CE);
+#else
+    // return false;
+
+    // TODO[seth]: does this need cleanup?
+    if (!Initializing && !classify(CE->getType())) {
+      auto Offset = this->allocateLocal(CE);
+      if (!Offset)
+        return false;
+      this->emitGetPtrLocal(*Offset, CE);
+    }
+
+    if (!this->visit(CE->getSubExpr()))
+      return false;
+    return this->emitEvalExpr(CE, CE);
+#endif
+  }
 
   default:
     assert(false && "Cast not implemented");
@@ -2517,6 +2799,27 @@ ByteCodeExprGen<Emitter>::allocateLocal(DeclTy &&Src, bool IsExtended) {
   return Local.Offset;
 }
 
+// TODO[seth] is this even a good idea?
+// template <class Emitter>
+// std::optional<unsigned>
+// ByteCodeExprGen<Emitter>::allocateLocal(/* TODO: args*/ bool IsExtended) {
+//   QualType Ty;
+//   bool IsTemporary = true;
+//   Expr *Init = nullptr;
+
+//   Descriptor *D = P.createDescriptor(
+//       Src, Ty.getTypePtr(), Descriptor::InlineDescMD, Ty.isConstQualified(),
+//       IsTemporary, /*IsMutable=*/false, /* unused*/ nullptr);
+//   if (!D)
+//     return {};
+
+//   Scope::Local Local = this->createLocal(D);
+//   if (Key)
+//     Locals.insert({Key, Local});
+//   VarScope->add(Local, IsExtended);
+//   return Local.Offset;
+// }
+
 template <class Emitter>
 const RecordType *ByteCodeExprGen<Emitter>::getRecordTy(QualType Ty) {
   if (const PointerType *PT = dyn_cast<PointerType>(Ty))
@@ -2687,51 +2990,256 @@ bool ByteCodeExprGen<Emitter>::visitAPValue(const APValue &Val,
   return false;
 }
 
+// TODO[seth] this code is in the wrong place; but where's the right one?
+// TODO[seth] this only works when immediately eval'd; I need to do more pointer
+// tomfoolery (dup/advance/etc) to fix that
+//             acktshually, that doesn't work, because this interleaves values
+//             w/ accesses; either we need to spec out the EvalExpr opcode to
+//             push its value / write to a peek'd pointer / w/e , or maybe keep
+//             it generic and leave an APValue on the stack, and then we have
+//             some "convert AP Value" opcode?
+//
+//             (sort of) orthogonally: do we have a richer set of opcodes for
+//              fetching e.g. field X of a struct APValue, and then the AOT
+//              compilation pass can just emit type-specific APValue<->Interp
+//              stack?
 template <class Emitter>
-bool ByteCodeExprGen<Emitter>::visitAPValue(const APValue &Val, const Expr *E) {
+bool ByteCodeExprGen<Emitter>::visitAPValue(const APValue &Val, const Expr *E,
+                                            std::optional<QualType> ValTy) {
   assert(!DiscardResult);
   assert(!E->containsErrors());
+  assert((std::is_same<Emitter, EvalEmitter>::value) && "todo: AoT");
 
+#ifdef NDEBUG
+#define always(v)                                                              \
+  { v; }
+#else
+#define always(v) assert(v)
+#endif
+#ifndef NDEBUG
+  unsigned StackSize = 0;
+  if constexpr (std::is_same<Emitter, EvalEmitter>::value)
+    StackSize = this->getState().Stk.size();
+#endif
+
+  const QualType Type = ValTy.value_or(E->getType());
   switch (Val.getKind()) {
   case APValue::None:
-    llvm_unreachable("tried to push None onto the stack?");
   case APValue::Indeterminate:
     return false;
 
   case APValue::Int:
+    // TODO[seth] this only differs in how it handles LValues, and 1) that's not
+    // us here, but also 2) not sure what to do with LValues akstshually return
+    // return visitAPValue(Val, classifyPrim(Type), E);
+    return this->emitConst(Val.getInt(), classifyPrim(Type), E);
+
   case APValue::Float:
-    return visitAPValue(Val, classifyPrim(E->getType()), E);
+    return this->emitConstFloat(Val.getFloat(), E);
 
   case APValue::LValue:
-    assert(false && "todo: APValue::LValue");
+    // TODO: nullptr gets us here?
+    assert(Val.isNullPointer());
+    // assert(false && "todo: APValue::LValue");
+    return false;
 
-  case APValue::Array:
   case APValue::Union:
-    assert(false && "todo");
+    assert(false && "todo: union");
+    return false;
+
+  case APValue::Array: {
+    // cf. interp::ArrayElemPtr ?
+    // visitArrayElemInit vs emitInitElem ?
+    assert(Type->isArrayType());
+    const QualType ElemTy = llvm::dyn_cast<ArrayType>(Type)->getElementType();
+    const std::optional<PrimType> PrimT = classify(ElemTy);
+    if constexpr (std::is_same<Emitter, EvalEmitter>::value) {
+      // TODO[seth]: atField(ValBase) vs atIndex(ValBase) ?
+      [[maybe_unused]] Pointer ArrPtr = this->getState().Stk.peekPtr();
+      assert(ArrPtr.getFieldDesc()->isArray());
+      assert(ArrPtr.getFieldDesc()->getNumElems() == Val.getArraySize());
+      assert(ArrPtr.getType()
+                 ->getArrayElementTypeNoTypeQual()
+                 ->getCanonicalTypeUnqualified() ==
+             ElemTy->getCanonicalTypeUnqualified());
+    }
+
+    // TODO[seth] reverse the order to improve cache locality?
+    //            and/or, a `memcpy+initialize` opcode might be cool
+    unsigned Index = 0, NElts = Val.getArrayInitializedElts();
+    for (; Index < NElts; ++Index) {
+      if constexpr (std::is_same<Emitter, EvalEmitter>::value)
+        assert(StackSize == this->getState().Stk.size());
+
+      const APValue &ElemVal = Val.getArrayInitializedElt(Index);
+      // TODO[seth] maximum size or sommat?
+      always(this->emitConstUint64(Index, E));
+      always(this->emitArrayElemPtrUint64(E));
+      if (!visitAPValue(ElemVal, E, ElemTy))
+        assert(false && "todo?");
+      // TODO[seth]: when can this fail?
+      if (PrimT)
+        always(this->emitInitElemPop(*PrimT, Index, E));
+      else
+        always(this->emitInitPtrPop(E));
+    }
+
+    // TODO[seth]: test for compound "filler"?
+    assert(!Val.hasArrayFiller() && "todo: filler?");
+
+    // if (Val.hasArrayFiller()) {
+    //   unsigned ArraySize = Val.getArraySize();
+    //   for (const APValue &ElemVal = Val.getArrayFiller(); Index < ArraySize;
+    //        ++Index) {
+    //     if (!visitAPValue(ElemVal, E, ElemTy,
+    //                       0 /*TODO (won't come up for primitives tho)*/))
+    //       continue;
+    //   }
+    // }
+    if constexpr (std::is_same<Emitter, EvalEmitter>::value)
+      assert(StackSize == this->getState().Stk.size());
+
+    return true;
+  }
 
   case APValue::Struct: {
-    OptionScope<Emitter> Scope(this, /*NewDiscardResult=*/false,
-                               /*NewInitializing=*/true);
-    const Record *R = getRecord(E->getType());
+    const Record *R = getRecord(Type);
     assert(R);
-    assert(R->getNumBases() == 0 && "todo: recur (bases)");
+
+    if constexpr (std::is_same<Emitter, EvalEmitter>::value) {
+      [[maybe_unused]] Pointer Ptr = this->getState().Stk.peekPtr();
+      [[maybe_unused]] QualType Ty = Ptr.getType();
+      // TODO[seth] ok this keeps getting stranger; a narrowed pointer has a
+      // descriptor whose:
+      //    1. type points to the whole array type, but
+      //    2. whose descriptor says "not an array" (?)
+      // if (Ptr.getFieldDesc()->isCompositeArray())
+      if (const auto *AT = dyn_cast<ArrayType>(Ty))
+        // TODO[seth] should Pointer::getType handle this? esp. when it's
+        // "narrowed"?
+        assert(R == getRecord(AT->getElementType()));
+      else
+        assert(R == getRecord(Ty));
+    }
+
+    auto Bases = R->bases();
+    unsigned BaseIdx = 0;
+    for (auto I = Bases.begin(), BE = Bases.end(); I != BE; I++, BaseIdx++) {
+      if constexpr (std::is_same<Emitter, EvalEmitter>::value)
+        assert(StackSize == this->getState().Stk.size());
+      const Record::Base &Base = *I;
+      const Descriptor *D = Base.Desc;
+      const APValue &BaseVal = Val.getStructBase(BaseIdx);
+      const QualType &BaseTy = D->getType();
+
+      // TODO[seth] is this possible? to have a primitive "base"?
+      // TODO[seth] test it? `enum A : int {}` or something?
+      assert(!D->isPrimitive());
+      // if (!D->isPrimitive()) {
+      //   if constexpr (std::is_same<Emitter, EvalEmitter>::value)
+      //     assert(
+      //         R ==
+      //         getRecord(
+      //             this->getState().Stk.peekPtr().atField(ValBase).getType()));
+      //   continue;
+      // }
+
+      // TODO[seth]: oh my.... why does GetPtrField pop, but GetPtrBase peeks?
+#if 1
+      always(this->emitDupPtr(E));
+      always(this->emitGetPtrBasePop(Base.Offset, E));
+#else
+      always(this->emitGetPtrBase(Base.Offset, E));
+#endif
+      if (visitAPValue(BaseVal, E, BaseTy))
+        always(this->emitInitPtrPop(E));
+      else
+        // maybe emitLoadPop but we check that it always fails?
+        assert(false && "todo: discard top of stack");
+#if 0
+
+      // always(this->emitDupPtr(E));
+      if (!visitAPValue(BaseVal, E, BaseTy, ValBase + Base.Offset))
+        continue;
+      continue;
+
+      auto PT = classifyPrim(BaseTy);
+      if constexpr (std::is_same<Emitter, EvalEmitter>::value) {
+        assert(PT == this->getState().Stk.peekType());
+        assert(R ==
+               getRecord(
+                   this->getState().Stk.peekPtr(1).atField(ValBase).getType()));
+      }
+
+      always(this->emitInitFieldActive(PT, ValBase + Base.Offset, E));
+#endif
+    }
+
+    if constexpr (std::is_same<Emitter, EvalEmitter>::value)
+      assert(StackSize == this->getState().Stk.size());
 
     auto Fields = R->fields();
     unsigned FieldIdx = 0;
     for (auto I = Fields.begin(), FE = Fields.end(); I != FE; I++, FieldIdx++) {
+      if constexpr (std::is_same<Emitter, EvalEmitter>::value)
+        assert(StackSize == this->getState().Stk.size());
+
       const Record::Field &Field = *I;
       const Descriptor *D = Field.Desc;
-      assert(D->isPrimitive() && "todo: recur");
+      const APValue &FieldVal = Val.getStructField(FieldIdx);
+      const QualType &FieldTy = D->getType();
 
-      const PrimType T = classifyPrim(D->getType());
-      if (!visitAPValue(Val.getStructField(FieldIdx), T, E))
-        return false; // TODO[seth]: why is my field value None?
-
-      {
-        bool OK = this->emitInitField(T, Field.Offset, E);
-        assert(OK);
+      always(this->emitDupPtr(E));
+      always(this->emitGetPtrField(Field.Offset, E));
+      if (!visitAPValue(FieldVal, E, FieldTy)) {
+        if constexpr (std::is_same<Emitter, EvalEmitter>::value) {
+          // this->getState().Stk.template pop<Pointer>();
+          this->getState().Stk.template discard<Pointer>();
+        } else {
+          assert(false && "todo: discard top of stack?");
+        }
+        continue;
       }
+
+      auto PT = classify(FieldTy);
+      if constexpr (std::is_same<Emitter, EvalEmitter>::value) {
+        [[maybe_unused]] InterpStack &Stk = this->getState().Stk;
+        if (D->isPrimitive()) {
+          // expect stack:
+          // 0: <prim>
+          // 1: ->field
+          // 2: ->struct
+          assert(PT == Stk.peekType());
+          assert(FieldTy == Stk.peekPtr(1).getType());
+          assert(R == [&](QualType Ty) {
+            if (const auto *AT = dyn_cast<ArrayType>(Ty))
+              return getRecord(AT->getElementType());
+            return getRecord(Ty);
+          }(Stk.peekPtr(2).getType()));
+
+          assert(!Stk.peekPtr(1).isInitialized());
+        } else {
+          // expect stack:
+          // 0: ->field
+          // 1: ->struct
+          assert(FieldTy == Stk.peekPtr(0).getType());
+          // TODO[seth]: the tortured construct from above, or.... ?
+          assert(R == getRecord(Stk.peekPtr(1).getType()));
+
+          // TODO[seth]: hmm, who's initializing my pointer?
+          // (this is coming up as part of the array elem M example)
+          // assert(!Stk.peekPtr(0).isInitialized());
+        }
+      }
+
+      if (PT)
+        always(this->emitInitPop(*PT, E));
+      else
+        always(this->emitInitPtrPop(E));
     }
+
+    if constexpr (std::is_same<Emitter, EvalEmitter>::value)
+      assert(StackSize == this->getState().Stk.size());
 
     return true;
   }
@@ -2747,6 +3255,7 @@ bool ByteCodeExprGen<Emitter>::visitAPValue(const APValue &Val, const Expr *E) {
     assert(false && "todo");
   }
   llvm_unreachable("Unhandled APValue::ValueKind");
+#undef always
 }
 
 template <class Emitter>

@@ -44,7 +44,7 @@ std::optional<APValue> EvaluationResult::toRValue() const {
 
   // We have a pointer and want an RValue.
   if (const auto *P = std::get_if<Pointer>(&Value))
-    return P->toRValue(*Ctx);
+    return P->toRValue(Ctx->getASTContext());
   else if (const auto *FP = std::get_if<FunctionPointer>(&Value)) // Nope
     return FP->toAPValue();
   llvm_unreachable("Unhandled lvalue kind");
@@ -101,10 +101,16 @@ static bool CheckFieldsInitialized(InterpState &S, SourceLocation Loc,
     Pointer FieldPtr = BasePtr.atField(F.Offset);
     QualType FieldType = F.Decl->getType();
 
+    if (F.isBitField() && F.Decl->isUnnamedBitfield())
+      // Skip padding-only fields.
+      continue;
+
+    if (FieldType->isIncompleteArrayType())
+      // Nothing to do here.
+      continue;
+
     if (FieldType->isRecordType()) {
       Result &= CheckFieldsInitialized(S, Loc, FieldPtr, FieldPtr.getRecord());
-    } else if (FieldType->isIncompleteArrayType()) {
-      // Nothing to do here.
     } else if (FieldType->isArrayType()) {
       const auto *CAT =
           cast<ConstantArrayType>(FieldType->getAsArrayTypeUnsafe());

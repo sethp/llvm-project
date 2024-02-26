@@ -451,6 +451,7 @@ let Class = PropertyTypeCase<APValue, "LValue"> in {
     bool lvalueBaseIsExpr = (bool) expr;
     bool lvalueBaseIsTypeInfo = lvalueBase.is<TypeInfoLValue>();
     bool lvalueBaseIsDynamicAlloc = lvalueBase.is<DynamicAllocLValue>();
+    // TODO[seth]: what about interp::Pointer* ?
     QualType elemTy;
     if (lvalueBase) {
       if (lvalueBaseIsTypeInfo) {

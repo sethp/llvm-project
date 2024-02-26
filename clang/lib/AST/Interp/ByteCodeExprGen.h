@@ -22,6 +22,7 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/Basic/TargetInfo.h"
+#include <optional>
 
 namespace clang {
 class QualType;
@@ -164,7 +165,8 @@ protected:
   bool visitVarDecl(const VarDecl *VD);
   /// Visit an APValue.
   bool visitAPValue(const APValue &Val, PrimType ValType, const Expr *E);
-  bool visitAPValue(const APValue &Val, const Expr *E);
+  bool visitAPValue(const APValue &Val, const Expr *E,
+                    std::optional<QualType> ValTy = std::nullopt);
 
   /// Visits an expression and converts it to a boolean.
   bool visitBool(const Expr *E);

@@ -147,8 +147,16 @@ private:
   size_t StackSize = 0;
 
 #ifndef NDEBUG
+public:
   /// vector recording the type of data we pushed into the stack.
   std::vector<PrimType> ItemTypes;
+
+  PrimType peekType() const {
+    assert(!ItemTypes.empty());
+    return ItemTypes.back();
+  }
+
+  const Pointer &peekPtr(size_t Skips = 0) const;
 
   template <typename T> static constexpr PrimType toPrimType() {
     if constexpr (std::is_same_v<T, Pointer>)
