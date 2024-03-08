@@ -1407,6 +1407,10 @@ bool ByteCodeExprGen<Emitter>::VisitInitListExpr(const InitListExpr *E) {
     return true;
   }
 
+  if (T->isVectorType()) {
+    return this->emitEvalExpr(E, E);
+  }
+
   return false;
 }
 
@@ -3319,7 +3323,87 @@ Outcome ByteCodeExprGen<Emitter>::visitAPValue(const APValue &Val,
     return true;
   }
 
-  case APValue::Vector:
+  case APValue::Vector: {
+    assert(Type->isVectorType());
+    const auto *VTy = Type->getAs<VectorType>();
+    assert(Val.getVectorLength() == VTy->getNumElements());
+
+    const QualType ElemTy = VTy->getElementType();
+    const PrimType ElemPTy = classifyPrim(ElemTy);
+    if constexpr (std::is_same<Emitter, EvalEmitter>::value) {
+      [[maybe_unused]] Pointer Ptr = this->getState().Stk.peekPtr();
+      assert(!Ptr.isZero() && "initElemPop would fail (nullptr)");
+      assert(Ptr.isLive() && "initElemPop would fail (ptr is not live)");
+      assert(Ptr.getFieldDesc()->isArray());
+      assert(Ptr.getFieldDesc()->getNumElems() == Val.getVectorLength() &&
+             "initElemPop would fail (out of range)");
+      assert(Ptr.getType()
+                 ->getAs<VectorType>()
+                 ->getElementType()
+                 ->getCanonicalTypeUnqualified() ==
+             ElemTy->getCanonicalTypeUnqualified());
+    }
+
+    constexpr PrimType IdxPTy = PT_Uint16;
+    assert(PrimConv<IdxPTy>::T::max() > VTy->getNumElements() &&
+           "65k ought to be enough vector elements for anybody");
+
+    // TODO[seth] reverse the order to improve cache locality?
+    //            and/or, a `memcpy+initialize` opcode might be cool
+    for (unsigned Index = 0, NElts = Val.getVectorLength(); Index < NElts;
+         ++Index) {
+      if constexpr (std::is_same<Emitter, EvalEmitter>::value)
+        assert(StackSize == this->getState().Stk.size());
+
+      const APValue &ElemVal = Val.getVectorElt(Index);
+      if (!ElemVal.hasValue())
+        // leave this slot uninitialized
+        continue;
+
+      always(this->emitConst(Index, IdxPTy, E));
+      always(this->emitArrayElemPtr(IdxPTy, E));
+      // TODO[seth]: hoist this up out of the loop?
+      if (auto O = [&]() -> Outcome {
+            switch (ElemVal.getKind()) {
+            case APValue::Int:
+              return this->emitConst(ElemVal.getInt(), ElemPTy, E);
+            case APValue::Float:
+              return this->emitConstFloat(ElemVal.getFloat(), E);
+
+            case APValue::ComplexInt:
+            case APValue::ComplexFloat:
+              return Outcome::NotImplemented;
+
+            case APValue::FixedPoint:
+              return Outcome::Unknown;
+
+            case APValue::None:
+            case APValue::Indeterminate:
+              llvm_unreachable("aleady checked ElemVal.hasValue()");
+            case APValue::LValue:
+            case APValue::Vector:
+            case APValue::Array:
+            case APValue::Struct:
+            case APValue::Union:
+            case APValue::MemberPointer:
+            case APValue::AddrLabelDiff:
+              llvm_unreachable("invalid vector element type");
+            }
+            llvm_unreachable("unhandled APValueKind");
+          }();
+          !O)
+        return O;
+
+      always(this->emitInitElemPop(ElemPTy, Index, E) &&
+             "ptr is checked above");
+    }
+
+    if constexpr (std::is_same<Emitter, EvalEmitter>::value)
+      assert(StackSize == this->getState().Stk.size());
+
+    return true;
+  }
+
   case APValue::FixedPoint:
   case APValue::ComplexInt:
   case APValue::ComplexFloat:

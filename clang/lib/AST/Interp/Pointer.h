@@ -247,6 +247,7 @@ public:
         return AT->getElementType();
       if (const auto *CT = getFieldDesc()->getType()->getAs<ComplexType>())
         return CT->getElementType();
+      // TODO[seth]: vector types?
     }
     return getFieldDesc()->getType();
   }

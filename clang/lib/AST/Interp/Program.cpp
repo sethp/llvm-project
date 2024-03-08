@@ -392,5 +392,57 @@ Descriptor *Program::createDescriptor(const DeclTy &D, const Type *Ty,
                               IsMutable);
   }
 
+  // // nullptr_t
+  // if (Ty->isNullPtrType()) {
+  //   return allocateDescriptor(D, PT_Ptr, MDSize, 0 /* metadata-only */,
+  //   IsConst,
+  //                             IsTemporary, IsMutable);
+  // }
+
+  // Vector types
+  if (const auto *VT = Ty->getAs<VectorType>()) {
+    PrimType ElemTy = *Ctx.classify(VT->getElementType());
+    enum Support {
+      HardNo,
+      Definitely,
+      NotYet,
+    } Level = [VT](PrimType ElemTy) {
+      switch (ElemTy) {
+      case PT_Sint8:
+      case PT_Uint8:
+      case PT_Sint16:
+      case PT_Uint16:
+      case PT_Sint32:
+      case PT_Uint32:
+      case PT_Sint64:
+      case PT_Uint64:
+        // always
+        return Definitely;
+      case PT_Float: {
+        assert(VT->getElementType()->isFloatingType());
+        // floats or doubles for suresies
+        if (VT->isSpecificBuiltinType(BuiltinType::Float) ||
+            VT->isSpecificBuiltinType(BuiltinType::Double))
+          return Definitely;
+        // but maybe not `half` or `long double`
+        return NotYet;
+      }
+      case PT_Bool:
+        return NotYet;
+      case PT_IntAP:
+      case PT_IntAPS:
+      case PT_Ptr:
+      case PT_FnPtr:
+        return HardNo;
+      }
+      llvm_unreachable("unhandled PrimType");
+    }(ElemTy);
+    if (Level != Definitely)
+      return nullptr;
+    // TODO[seth]: can we get away with "just" a packed array representation?
+    return allocateDescriptor(D, ElemTy, MDSize, VT->getNumElements(), IsConst,
+                              IsTemporary, IsMutable);
+  }
+
   return nullptr;
 }

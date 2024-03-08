@@ -382,6 +382,34 @@ std::optional<APValue> Pointer::toRValue(const ASTContext &Ctx) const {
       return false;
     }
 
+    // Vector types.
+    if (const auto *VT = Ty->getAs<VectorType>()) {
+      QualType ElemTy = VT->getElementType();
+      std::optional<PrimType> ElemT = Context::classify(ElemTy, Ctx);
+      const size_t NumElems = Ptr.getNumElems();
+      assert(ElemT);
+      assert(Ptr.isArrayRoot());
+      assert(VT->getNumElements() == NumElems);
+
+      llvm::SmallVector<APValue, 8> Elts;
+      Elts.reserve(NumElems);
+      for (unsigned I = 0; I < NumElems; ++I) {
+        APValue &Elt = Elts.emplace_back();
+        if (!Ptr.isInitialized()) {
+          Elt = APValue::IndeterminateValue();
+        } else if (ElemTy->isIntegerType()) {
+          INT_TYPE_SWITCH(
+              *ElemT, { Elt = APValue(Ptr.atIndex(I).deref<T>().toAPSInt()); });
+        } else if (ElemTy->isFloatingType()) {
+          Elt = APValue(Ptr.atIndex(I).deref<Floating>().getAPFloat());
+        }
+      }
+
+      R = APValue(Elts.data(), NumElems);
+
+      return true;
+    }
+
     llvm_unreachable("invalid value to return");
   };
 
