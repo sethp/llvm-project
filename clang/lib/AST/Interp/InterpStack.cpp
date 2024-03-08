@@ -12,6 +12,7 @@
 #include "Integral.h"
 #include "Interp/PrimType.h"
 #include "Pointer.h"
+#include "llvm/Support/Compiler.h"
 #include <cassert>
 #include <cstdlib>
 
@@ -85,7 +86,7 @@ void InterpStack::shrink(size_t Size) {
   StackSize -= Size;
 }
 
-void InterpStack::dump() const {
+LLVM_DUMP_METHOD void InterpStack::dump() const {
 #ifndef NDEBUG
   llvm::errs() << "Items: " << ItemTypes.size() << ". Size: " << size() << '\n';
   if (ItemTypes.empty())
@@ -105,70 +106,73 @@ void InterpStack::dump() const {
       llvm::errs() << V;
     });
     if (*TyIt == PT_Ptr) {
-      llvm::errs() << "\t*(" << peek<Pointer>(Offset).getType() << ")";
-    } else {
-      llvm::errs() << "\t<";
-      switch (*TyIt) {
-      case PT_Sint8: {
-        llvm ::errs() << "PT_Sint8";
-        break;
-      }
-      case PT_Uint8: {
-        llvm ::errs() << "PT_Uint8";
-        break;
-      }
-      case PT_Sint16: {
-        llvm ::errs() << "PT_Sint16";
-        break;
-      }
-      case PT_Uint16: {
-        llvm ::errs() << "PT_Uint16";
-        break;
-      }
-      case PT_Sint32: {
-        llvm ::errs() << "PT_Sint32";
-        break;
-      }
-      case PT_Uint32: {
-        llvm ::errs() << "PT_Uint32";
-        break;
-      }
-      case PT_Sint64: {
-        llvm ::errs() << "PT_Sint64";
-        break;
-      }
-      case PT_Uint64: {
-        llvm ::errs() << "PT_Uint64";
-        break;
-      }
-      case PT_IntAP: {
-        llvm ::errs() << "PT_IntAP";
-        break;
-      }
-      case PT_IntAPS: {
-        llvm ::errs() << "PT_IntAPS";
-        break;
-      }
-      case PT_Float: {
-        llvm ::errs() << "PT_Float";
-        break;
-      }
-      case PT_Bool: {
-        llvm ::errs() << "PT_Bool";
-        break;
-      }
-      case PT_Ptr: {
-        llvm ::errs() << "PT_Ptr";
-        break;
-      }
-      case PT_FnPtr: {
-        llvm ::errs() << "PT_FnPtr";
-        break;
-      }
-      }
-      llvm::errs() << ">";
+      if (peek<Pointer>(Offset).isZero())
+        llvm::errs() << "\tnullptr\n";
+      else
+        llvm::errs() << "\t*(" << peek<Pointer>(Offset).getType() << ")\n";
+      continue;
     }
-    llvm::errs() << '\n';
+
+    llvm::errs() << "\t<";
+    switch (*TyIt) {
+    case PT_Sint8: {
+      llvm::errs() << "PT_Sint8";
+      break;
+    }
+    case PT_Uint8: {
+      llvm::errs() << "PT_Uint8";
+      break;
+    }
+    case PT_Sint16: {
+      llvm::errs() << "PT_Sint16";
+      break;
+    }
+    case PT_Uint16: {
+      llvm::errs() << "PT_Uint16";
+      break;
+    }
+    case PT_Sint32: {
+      llvm::errs() << "PT_Sint32";
+      break;
+    }
+    case PT_Uint32: {
+      llvm::errs() << "PT_Uint32";
+      break;
+    }
+    case PT_Sint64: {
+      llvm::errs() << "PT_Sint64";
+      break;
+    }
+    case PT_Uint64: {
+      llvm::errs() << "PT_Uint64";
+      break;
+    }
+    case PT_IntAP: {
+      llvm::errs() << "PT_IntAP";
+      break;
+    }
+    case PT_IntAPS: {
+      llvm::errs() << "PT_IntAPS";
+      break;
+    }
+    case PT_Float: {
+      llvm::errs() << "PT_Float";
+      break;
+    }
+    case PT_Bool: {
+      llvm::errs() << "PT_Bool";
+      break;
+    }
+    case PT_Ptr: {
+      llvm::errs() << "PT_Ptr";
+      break;
+    }
+    case PT_FnPtr: {
+      llvm::errs() << "PT_FnPtr";
+      break;
+    }
+    }
+    llvm::errs() << ">\n";
 
     ++Index;
   }

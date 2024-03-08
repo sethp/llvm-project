@@ -13,6 +13,7 @@
 #include "ByteCodeStmtGen.h"
 #include "EvalEmitter.h"
 #include "Interp.h"
+#include "Interp/EvaluationResult.h"
 #include "InterpFrame.h"
 #include "InterpStack.h"
 #include "PrimType.h"
@@ -98,7 +99,7 @@ bool Context::evaluateAsInitializer(State &Parent, const VarDecl *VD,
   assert(Stk.empty());
   ByteCodeExprGen<EvalEmitter> C(*this, *P, Parent, Stk, Result);
 
-  auto Res = C.interpretDecl(VD);
+  EvaluationResult Res = C.interpretDecl(VD);
   if (Res.isInvalid()) {
     Stk.clear();
     return false;

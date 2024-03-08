@@ -31,11 +31,13 @@
 #include "clang/AST/Stmt.h"
 #include "clang/AST/Type.h"
 #include "clang/Basic/Builtins.h"
+#include "clang/Basic/Specifiers.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <cassert>
 #include <optional>
+#include <unistd.h>
 
 using namespace clang;
 using namespace clang::interp;
@@ -717,6 +719,8 @@ bool ByteCodeExprGen<Emitter>::VisitCastExpr(const CastExpr *CE) {
 #else
     // return false;
 
+    // TODO[seth]: what's the name for this op? something something alloca?
+    // TODO[seth]: does this condition have a name? "LValue required"?
     // TODO[seth]: does this need cleanup?
     if (!Initializing && !classify(CE->getType())) {
       auto Offset = this->allocateLocal(CE);
@@ -727,7 +731,33 @@ bool ByteCodeExprGen<Emitter>::VisitCastExpr(const CastExpr *CE) {
 
     if (!this->visit(CE->getSubExpr()))
       return false;
-    return this->emitEvalExpr(CE, CE);
+    if (!this->emitEvalExpr(CE, CE))
+      return false;
+
+    // we have to evaluate the expression, even when we're discarding
+    // consider:
+    // ```c++
+    // using Ty = unsigned char[8];
+    // constexpr int test_from_nullptr = (__builtin_bit_cast(Ty, nullptr), 0);
+    // ```
+    // we want to discard the bit cast result, but we can only produce the zero
+    // when the cast is valid; if Ty were a different size, or had a base type
+    // that didn't permit indeterminate bit patterns (i.e. anything other than
+    // `unsigned char`)
+    if (DiscardResult) {
+      assert(!classify(CE->getType()));
+
+      if constexpr (std::is_same<Emitter, EvalEmitter>::value)
+        this->getState().Stk.template discard<Pointer>();
+      else
+        assert(false && "todo: discard top of stack?");
+
+      // cf. (via ByteCodeExprGen<Emitter>::VisitCallExpr)
+      // // Cleanup for discarded return values.
+      // if (DiscardResult && !ReturnType->isVoidType() && T)
+      //   return this->emitPop(*T, E);
+    }
+    return true;
 #endif
   }
 
@@ -1202,12 +1232,30 @@ bool ByteCodeExprGen<Emitter>::visitInitList(ArrayRef<const Expr *> Inits,
   assert(E->getType()->isRecordType());
   const Record *R = getRecord(E->getType());
 
+  // TODO[seth]: should we be checking something about the number of Inits and
+  // the number of fields?
+
+  // TODO[seth]: why am I remembering a "double-wide" initializer value?
+  enum CONSUME { Zero, One };
+  constexpr auto ConsumeInits = [](const Record::Field *F) -> CONSUME {
+    if (F->Decl->isUnnamedBitfield())
+      return Zero;
+    return One;
+  };
+
   unsigned InitIndex = 0;
   for (const Expr *Init : Inits) {
     if (!this->emitDupPtr(E))
       return false;
 
+    // TODO[seth]: this feels a little weird to be based on the
+    // type of the Expr and not the Field... what happens when they mis-match?
     if (std::optional<PrimType> T = classify(Init)) {
+      // Skip over padding-only fields that don't take values
+      while (ConsumeInits(R->getField(InitIndex)) == Zero)
+        ++InitIndex;
+      assert(ConsumeInits(R->getField(InitIndex)) == One);
+
       const Record::Field *FieldToInit = R->getField(InitIndex);
       if (!this->visit(Init))
         return false;
@@ -1237,6 +1285,9 @@ bool ByteCodeExprGen<Emitter>::visitInitList(ArrayRef<const Expr *> Inits,
         // Base initializers don't increase InitIndex, since they don't count
         // into the Record's fields.
       } else {
+        // TODO[seth]: should we also skip fields sometimes here? something
+        // something ZSTs?
+
         const Record::Field *FieldToInit = R->getField(InitIndex);
         // Non-primitive case. Get a pointer to the field-to-initialize
         // on the stack and recurse into visitInitializer().
@@ -3004,8 +3055,9 @@ bool ByteCodeExprGen<Emitter>::visitAPValue(const APValue &Val,
 //              compilation pass can just emit type-specific APValue<->Interp
 //              stack?
 template <class Emitter>
-bool ByteCodeExprGen<Emitter>::visitAPValue(const APValue &Val, const Expr *E,
-                                            std::optional<QualType> ValTy) {
+Outcome ByteCodeExprGen<Emitter>::visitAPValue(const APValue &Val,
+                                               const Expr *E,
+                                               std::optional<QualType> ValTy) {
   assert(!DiscardResult);
   assert(!E->containsErrors());
   assert((std::is_same<Emitter, EvalEmitter>::value) && "todo: AoT");
@@ -3026,32 +3078,41 @@ bool ByteCodeExprGen<Emitter>::visitAPValue(const APValue &Val, const Expr *E,
   switch (Val.getKind()) {
   case APValue::None:
   case APValue::Indeterminate:
-    return false;
+    return Outcome::NoVal;
 
   case APValue::Int:
     // TODO[seth] this only differs in how it handles LValues, and 1) that's not
-    // us here, but also 2) not sure what to do with LValues akstshually return
+    // us here, but also 2) not sure what to do with LValues akstshually
+    //
     // return visitAPValue(Val, classifyPrim(Type), E);
     return this->emitConst(Val.getInt(), classifyPrim(Type), E);
 
   case APValue::Float:
     return this->emitConstFloat(Val.getFloat(), E);
 
-  case APValue::LValue:
-    // TODO: nullptr gets us here?
-    assert(Val.isNullPointer());
-    // assert(false && "todo: APValue::LValue");
-    return false;
+  case APValue::LValue: {
+    // TODO[seth]: NotImplemented instead of bombing out?
+    assert(Val.isNullPointer() && "todo: other LValues");
+    // if constexpr (std::is_same<Emitter, EvalEmitter>::value)
+    //   assert((this->getState().Stk.peekPtr(),
+    //           "peeking implicitly asserts the existence of a pointer"));
+
+    // TODO[seth]: is it valid to assign a nullptr to anything else?
+    auto PT = classify(Type).value_or(PT_Ptr);
+    always(this->emitNull(PT, E));
+    // always(this->emitInitPop(PT, E));
+    return Outcome::Ok;
+  }
 
   case APValue::Union:
     assert(false && "todo: union");
-    return false;
+    return Outcome::NotImplemented;
 
   case APValue::Array: {
     // cf. interp::ArrayElemPtr ?
     // visitArrayElemInit vs emitInitElem ?
     assert(Type->isArrayType());
-    const QualType ElemTy = llvm::dyn_cast<ArrayType>(Type)->getElementType();
+    const QualType ElemTy = llvm::cast<ArrayType>(Type)->getElementType();
     const std::optional<PrimType> PrimT = classify(ElemTy);
     if constexpr (std::is_same<Emitter, EvalEmitter>::value) {
       // TODO[seth]: atField(ValBase) vs atIndex(ValBase) ?
@@ -3075,8 +3136,17 @@ bool ByteCodeExprGen<Emitter>::visitAPValue(const APValue &Val, const Expr *E,
       // TODO[seth] maximum size or sommat?
       always(this->emitConstUint64(Index, E));
       always(this->emitArrayElemPtrUint64(E));
-      if (!visitAPValue(ElemVal, E, ElemTy))
-        assert(false && "todo?");
+      if (const auto O = visitAPValue(ElemVal, E, ElemTy); !O) {
+        switch (O.Res) {
+        case Outcome::Ok:
+          llvm_unreachable("not Ok");
+        case Outcome::NoVal:
+          this->emitPopPtr(E);
+          continue;
+        default:
+          return O;
+        }
+      }
       // TODO[seth]: when can this fail?
       if (PrimT)
         always(this->emitInitElemPop(*PrimT, Index, E));
@@ -3084,7 +3154,7 @@ bool ByteCodeExprGen<Emitter>::visitAPValue(const APValue &Val, const Expr *E,
         always(this->emitInitPtrPop(E));
     }
 
-    // TODO[seth]: test for compound "filler"?
+    // TODO[seth]: write a test for compound "filler"?
     assert(!Val.hasArrayFiller() && "todo: filler?");
 
     // if (Val.hasArrayFiller()) {
@@ -3234,7 +3304,12 @@ bool ByteCodeExprGen<Emitter>::visitAPValue(const APValue &Val, const Expr *E,
 
       if (PT)
         always(this->emitInitPop(*PT, E));
+      else if (FieldTy->isArrayType())
+        // arrays have no distinct "initialized" bit from their
+        // first element....
+        always(this->emitPopPtr(E));
       else
+        // ... but records do
         always(this->emitInitPtrPop(E));
     }
 
@@ -3248,11 +3323,11 @@ bool ByteCodeExprGen<Emitter>::visitAPValue(const APValue &Val, const Expr *E,
   case APValue::FixedPoint:
   case APValue::ComplexInt:
   case APValue::ComplexFloat:
-    assert(false && "todo");
+    return Outcome::NotImplemented;
 
   case APValue::MemberPointer:
   case APValue::AddrLabelDiff:
-    assert(false && "todo");
+    return Outcome::Unknown;
   }
   llvm_unreachable("Unhandled APValue::ValueKind");
 #undef always

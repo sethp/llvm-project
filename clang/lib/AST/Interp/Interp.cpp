@@ -26,6 +26,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
+#include <cassert>
 #include <limits>
 #include <vector>
 
@@ -48,6 +49,26 @@ bool EvalExpr(InterpState &S, CodePtr &PC, const Expr *E) {
   //   }
   //   return nullptr;
   // }();
+
+  struct Toggle {
+#ifdef NDEBUG
+#define always(v)                                                              \
+  { v; }
+#else
+#define always(v) assert(v)
+#endif
+    Toggle() { always(!Expr::toggleInterp()); }
+    ~Toggle() { always(Expr::toggleInterp()); }
+#undef always
+  };
+  SmallVector<PartialDiagnosticAt, 2> Notes;
+  Expr::EvalResult R;
+  R.Diag = &Notes;
+  const auto Eval = [&S](const Expr *E, Expr::EvalResult &Result) {
+    Toggle InterpToggle;
+    return E->EvaluateAsConstantExpr(Result, S.getContext().getASTContext(),
+                                     ConstantExprKind::CrossCall, -1);
+  };
 
   // TODO[seth]: there's got to be a clever-er way to do this
   // something like: if E has a subexpr, then pop stuff, otherwise just call it
@@ -103,35 +124,6 @@ bool EvalExpr(InterpState &S, CodePtr &PC, const Expr *E) {
 
     WithSubExpr RAII_Thing(const_cast<CastExpr *>(CE), InterpExpr);
 
-    struct Toggle {
-#ifdef NDEBUG
-#define always(v)                                                              \
-  { v; }
-#else
-#define always(v) assert(v)
-#endif
-      Toggle() { always(!Expr::toggleInterp()); }
-      ~Toggle() { always(Expr::toggleInterp()); }
-#undef always
-    };
-    SmallVector<PartialDiagnosticAt, 2> Notes;
-    Expr::EvalResult R;
-    R.Diag = &Notes;
-
-    const auto Eval = [&S](const Expr *E, Expr::EvalResult &Result) {
-      Toggle InterpToggle;
-      auto &ASTCtx = S.getContext().getASTContext();
-      switch (E->getValueKind()) {
-      case VK_PRValue:
-        return E->EvaluateAsRValue(Result, ASTCtx, true);
-      case VK_LValue:
-      case VK_XValue:
-        assert(E->isGLValue());
-        return E->EvaluateAsLValue(Result, ASTCtx, true);
-      default:
-        llvm_unreachable("unhandled ExprValueKind");
-      }
-    };
     if (!Eval(CE, R)) {
       S.setActiveDiagnostic(true);
       S.addNotes(Notes);
@@ -147,17 +139,58 @@ bool EvalExpr(InterpState &S, CodePtr &PC, const Expr *E) {
                                          S.getContext().getProgram(), S,
                                          S.getContext().getStack(), ignored) {}
 
-      bool push(APValue &Val, const Expr *E) { return visitAPValue(Val, E); }
+      Result push(APValue &Val, const Expr *E) {
+        return visitAPValue(Val, E) ? ConstOK : NonConst;
+      }
     };
     oops C(S);
     auto RV = C.push(R.Val, E);
-    assert(RV || R.Val.isNullPointer());
+    // TODO[seth]: what does it mean to successfully produce an indeterminate
+    // value, as far as our stack state goes?
+    //
+    // something like: if it's a field in a container type, then we're allowed
+    // to proceed (when?), because it's OK as long as it's not accessed?
+    assert(RV == Result::ConstOK || R.Val.isIndeterminate());
     // return C.push(R.Val, E);
-    return RV;
+    return RV == Result::ConstOK;
+  }
+
+  if (const auto *ILE = llvm::dyn_cast<InitListExpr>(E)) {
+    if (!Eval(ILE, R)) {
+      S.setActiveDiagnostic(true);
+      S.addNotes(Notes);
+      return false;
+    }
+
+    // fixme: move the visit logic around to avoid this wrapper
+    struct oops : ByteCodeExprGen<EvalEmitter> {
+      APValue ignored;
+
+      oops(InterpState &S)
+          : ByteCodeExprGen<EvalEmitter>(S.getContext(),
+                                         S.getContext().getProgram(), S,
+                                         S.getContext().getStack(), ignored) {}
+
+      Result push(APValue &Val, const Expr *E) {
+        return visitAPValue(Val, E) ? ConstOK : NonConst;
+      }
+    };
+    oops C(S);
+    auto RV = C.push(R.Val, E);
+    // TODO[seth]: what does it mean to successfully produce an indeterminate
+    // value, as far as our stack state goes?
+    //
+    // something like: if it's a field in a container type, then we're allowed
+    // to proceed (always?), because it's OK as long as it's not accessed?
+    assert(RV == Result::ConstOK || R.Val.isIndeterminate());
+    // return C.push(R.Val, E);
+    return RV == Result::ConstOK;
   }
 
   llvm::SmallString<20> Err("unhandled StmtClass: ");
   Err += E->getStmtClassName();
+  assert(false &&
+         "fatal error, but report_fatal_error just kinda swallows it up");
   llvm::report_fatal_error(Err.data());
 }
 

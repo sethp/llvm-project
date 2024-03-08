@@ -528,7 +528,7 @@ typedef decltype(nullptr) nullptr_t;
 // expected-note@+3 {{indeterminate value can only initialize an object of type 'unsigned char' or 'std::byte'; 'unsigned long' is invalid}}
 #endif
 // expected-error@+1 {{constexpr variable 'test_from_nullptr' must be initialized by a constant expression}}
-constexpr unsigned long test_from_nullptr = __builtin_bit_cast(unsigned long, nullptr);
+constexpr unsigned long test_from_nullptr = (__builtin_bit_cast(unsigned long, nullptr), 0);
 
 constexpr int test_from_nullptr_pass = (__builtin_bit_cast(unsigned char[8], nullptr), 0);
 

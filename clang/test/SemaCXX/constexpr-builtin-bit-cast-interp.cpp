@@ -11,12 +11,11 @@
 #endif
 
 #if 0
+namespace std {
+enum byte : unsigned char {};
+} // namespace std
+
 namespace min {
-
-// static_assert(__builtin_bit_cast(unsigned, (int)-1) == -1u);
-
-static_assert(sizeof(int) == 4);
-static_assert(sizeof(long long) == 8);
 
 using uint8_t = unsigned char;
 using uint16_t = unsigned __INT16_TYPE__;
@@ -54,10 +53,142 @@ constexpr To bit_cast(const From &from) {
   static_assert(sizeof(To) == sizeof(From));
   return __builtin_bit_cast(To, from);
 }
-namespace std {
-enum byte : unsigned char {};
-} // namespace std
+// template <class Intermediate, class Init>
+// constexpr Init round_trip(const Init &init) {
+//   return bit_cast<Init>(bit_cast<Intermediate>(init));
+// }
+template <class Intermediate, class Init>
+constexpr Init round_trip(const Init &init) {
+  auto zz = bit_cast<Intermediate>(init);
+  return bit_cast<Init>(zz);
+}
+typedef decltype(nullptr) nullptr_t;
 
+
+
+namespace test_vector {
+
+typedef unsigned uint2 __attribute__((vector_size(2 * sizeof(unsigned))));
+typedef char byte8 __attribute__((vector_size(sizeof(unsigned long long))));
+
+constexpr uint2 test_vector = { 0x0C05FEFE, 0xCAFEBABE };
+
+static_assert(bit_cast<unsigned long long>(test_vector) == (LITTLE_END
+                                                                ? 0xCAFEBABE0C05FEFE
+                                                                : 0x0C05FEFECAFEBABE));
+
+} // namespace test_vector
+
+
+struct A { char c; /* char padding : 8; */ short s; };
+struct B { unsigned char x[4]; };
+
+constexpr B one() {
+  A a = {1, 2};
+  return bit_cast<B>(a);
+}
+
+constexpr A two() {
+  B b = one(); // b.x[1] is indeterminate.
+  b.x[0] = 'a';
+  b.x[2] = 1;
+  b.x[3] = 2;
+  return bit_cast<A>(b);
+}
+constexpr short good_twoz = round_trip<B, A>({1, 2}).c;
+constexpr short good_two = two().c + two().s;
+constexpr char good_one = one().x[0] + one().x[2] + one().x[3];
+// expected-error@+2 {{constexpr variable 'bad_one' must be initialized by a constant expression}}
+// expected-note@+1 {{read of uninitialized object is not allowed in a constant expression}}
+constexpr char bad_one = one().x[1];
+
+
+
+
+struct indet_mem {
+  unsigned char data[sizeof(void *)];
+};
+constexpr indet_mem im = __builtin_bit_cast(indet_mem, nullptr);
+constexpr nullptr_t npt2 = __builtin_bit_cast(nullptr_t, im);
+static_assert(npt2 == nullptr);
+
+constexpr int test_to_nullptr() {
+  nullptr_t npt = __builtin_bit_cast(nullptr_t, 0ul);
+
+  struct indet_mem {
+    std::byte data[sizeof(void *)];
+  };
+  indet_mem im = __builtin_bit_cast(indet_mem, nullptr);
+  nullptr_t npt2 = __builtin_bit_cast(nullptr_t, im);
+
+  return 0;
+}
+
+constexpr int ttn = test_to_nullptr();
+
+
+
+
+struct BF { unsigned char z : 2; };
+
+constexpr BF bf = {0x3};
+
+struct M {
+  // zexpected-note@+1 {{subobject declared here}}
+  unsigned char mem[sizeof(BF)];
+};
+// zexpected-error@+2 {{initialized by a constant expression}}
+// zexpected-note@+1 {{not initialized}}
+constexpr M m = bit_cast<M, BF>({0x3});
+// static_assert(m.mem[0] == 0x3);
+
+
+
+// expected-error@+1 {{not an integral constant expression}}
+static_assert(bit_cast<unsigned char>(bf));
+
+
+// constexpr int test_from_nullptr_pass = (__builtin_bit_cast(unsigned char[8], nullptr), 0);
+
+
+// constexpr auto g = []() constexpr {
+//   // bits<24, unsigned int, LITTLE_END ? 0 : 8> B = {0xc0ffee};
+//   constexpr struct { unsigned short b1; unsigned char b0; unsigned char z; } B = {0xc0ff, 0xee};
+//   return bit_cast<bytes<4>>(B);
+// };
+
+// static_assert(g()[0] + g()[1] + g()[2] == 0xc0 + 0xff + 0xee);
+constexpr auto f = []() constexpr {
+  // bits<24, unsigned int, LITTLE_END ? 0 : 8> B = {0xc0ffee};
+  constexpr struct { unsigned short b1; unsigned char b0;  } B = {0xc0ff, 0xee};
+  return bit_cast<bytes<4>>(B);
+};
+
+static_assert(f()[0] + f()[1] + f()[2] == 0xc0 + 0xff + 0xee);
+
+#if 0
+
+static_assert(__builtin_bit_cast(unsigned, (int)-1) == -1u);
+
+static_assert(sizeof(int) == 4);
+static_assert(sizeof(long long) == 8);
+
+namespace enums {
+// ensure we're packed into the top 2 bits
+constexpr int pad = LITTLE_END ? 6 : 0;
+struct X
+{
+    char : pad;
+    enum class direction: char { left, right, up, down } direction : 2;
+};
+
+constexpr X x = { X::direction::down };
+static_assert(bit_cast<bits<2, signed char, pad>>(x) == -1);
+static_assert(bit_cast<bits<2, unsigned char, pad>>(x) == 3);
+static_assert(
+  bit_cast<X>((unsigned char)0x40).direction == X::direction::right);
+
+};
 struct R {
   unsigned int r : 31;
   unsigned int : 0;
@@ -110,7 +241,6 @@ namespace nested_structs {
 }
 
 
-#if 0
 namespace t {
      struct Q {
       // cf. CGBitFieldInfo
@@ -178,15 +308,6 @@ void wrapper() {
   static_assert(g(f) == f());
 }
 
-// template <class Intermediate, class Init>
-// constexpr Init round_trip(const Init &init) {
-//   return bit_cast<Init>(bit_cast<Intermediate>(init));
-// }
-template <class Intermediate, class Init>
-constexpr Init round_trip(const Init &init) {
-  auto zz = bit_cast<Intermediate>(init);
-  return bit_cast<Init>(zz);
-}
 void test_record() {
   struct int_splicer {
     unsigned x;
@@ -260,5 +381,11 @@ void test_record() {
 } // namespace min
 
 #else
+static_assert(__builtin_bit_cast(unsigned, (int)-1) == -1u);
+
 #include "./constexpr-builtin-bit-cast.cpp"
 #endif
+
+// constexpr int test_comma = (__builtin_bit_cast(unsigned char[8], nullptr), 0);
+// constexpr int test_comma_fail = (__builtin_bit_cast(unsigned long, nullptr), 0);
+

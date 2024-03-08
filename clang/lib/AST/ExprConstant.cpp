@@ -173,6 +173,7 @@ namespace {
     case ConstantExprKind::Normal:
     case ConstantExprKind::ClassTemplateArgument:
     case ConstantExprKind::ImmediateInvocation:
+    case ConstantExprKind::CrossCall:
       // Note that non-type template arguments of class type are emitted as
       // template parameter objects.
       return false;
@@ -187,6 +188,7 @@ namespace {
     switch (Kind) {
     case ConstantExprKind::Normal:
     case ConstantExprKind::ImmediateInvocation:
+    case ConstantExprKind::CrossCall:
       return false;
 
     case ConstantExprKind::ClassTemplateArgument:
@@ -1903,7 +1905,8 @@ static bool EvaluateFloat(const Expr *E, APFloat &Result, EvalInfo &Info);
 static bool EvaluateComplex(const Expr *E, ComplexValue &Res, EvalInfo &Info);
 static bool EvaluateAtomic(const Expr *E, const LValue *This, APValue &Result,
                            EvalInfo &Info);
-static bool EvaluateAsRValue(EvalInfo &Info, const Expr *E, APValue &Result);
+static bool EvaluateAsRValue(EvalInfo &Info, const Expr *E, APValue &Result,
+                             ConstantExprKind Kind = ConstantExprKind::Normal);
 static bool EvaluateBuiltinStrLen(const Expr *E, uint64_t &Result,
                                   EvalInfo &Info);
 
@@ -2456,7 +2459,15 @@ static bool CheckEvaluationResult(CheckEvaluationResultKind CERK,
                                   ConstantExprKind Kind,
                                   const FieldDecl *SubobjectDecl,
                                   CheckedTemporaries &CheckedTemps) {
-  if (!Value.hasValue()) {
+  // TODO[seth] this is too strong, yeah? or are indeterminate values allowed
+  // until accessed?
+  if (Value.isIndeterminate() &&
+      (Type->isStdByteType() ||
+       Type->isSpecificBuiltinType(BuiltinType::UChar) ||
+       Type->isSpecificBuiltinType(BuiltinType::Char_U)))
+    return true;
+
+  if (!Value.hasValue() && Kind != ConstantExprKind::CrossCall) {
     if (SubobjectDecl) {
       Info.FFDiag(DiagLoc, diag::note_constexpr_uninitialized)
           << /*(name)*/ 1 << SubobjectDecl;
@@ -15921,7 +15932,8 @@ static bool EvaluateInPlace(APValue &Result, EvalInfo &Info, const LValue &This,
 
 /// EvaluateAsRValue - Try to evaluate this expression, performing an implicit
 /// lvalue-to-rvalue cast if it is an lvalue.
-static bool EvaluateAsRValue(EvalInfo &Info, const Expr *E, APValue &Result) {
+static bool EvaluateAsRValue(EvalInfo &Info, const Expr *E, APValue &Result,
+                             ConstantExprKind Kind) {
   assert(!E->isValueDependent());
 
   if (E->getType().isNull())
@@ -15934,7 +15946,7 @@ static bool EvaluateAsRValue(EvalInfo &Info, const Expr *E, APValue &Result) {
     if (!Info.Ctx.getInterpContext().evaluateAsRValue(Info, E, Result))
       return false;
     return CheckConstantExpression(Info, E->getExprLoc(), E->getType(), Result,
-                                   ConstantExprKind::Normal);
+                                   Kind);
   }
 
   if (!::Evaluate(Result, Info, E))
@@ -15950,7 +15962,7 @@ static bool EvaluateAsRValue(EvalInfo &Info, const Expr *E, APValue &Result) {
 
   // Check this core constant expression is a constant expression.
   return CheckConstantExpression(Info, E->getExprLoc(), E->getType(), Result,
-                                 ConstantExprKind::Normal) &&
+                                 Kind) &&
          CheckMemoryLeaks(Info);
 }
 
@@ -15999,13 +16011,14 @@ static bool hasUnacceptableSideEffect(Expr::EvalStatus &Result,
 }
 
 static bool EvaluateAsRValue(const Expr *E, Expr::EvalResult &Result,
-                             const ASTContext &Ctx, EvalInfo &Info) {
+                             const ASTContext &Ctx, EvalInfo &Info,
+                             ConstantExprKind Kind = ConstantExprKind::Normal) {
   assert(!E->isValueDependent());
   bool IsConst;
   if (FastEvaluateAsRValue(E, Result, Ctx, IsConst))
     return IsConst;
 
-  return EvaluateAsRValue(Info, E, Result.Val);
+  return EvaluateAsRValue(Info, E, Result.Val, Kind);
 }
 
 static bool EvaluateAsInt(const Expr *E, Expr::EvalResult &ExprResult,
@@ -16183,6 +16196,22 @@ bool Expr::EvaluateAsConstantExpr(EvalResult &Result, const ASTContext &Ctx,
   }
   if (Info.EnableNewConstInterp)
     --Info.InterpSkipsLeft;
+  if (Kind == ConstantExprKind::CrossCall) {
+    switch (this->getValueKind()) {
+    case VK_PRValue:
+      // TODO[seth]: what does this do (besides make tests pass)?
+      Info.EvalMode = EvalInfo::EM_IgnoreSideEffects;
+      // this->EvaluateAsRValue(&Result, &Ctx)
+      return ::EvaluateAsRValue(this, Result, Ctx, Info, Kind);
+    case VK_LValue:
+    case VK_XValue:
+      assert(this->isGLValue());
+      assert(false && "todo");
+      // return this->EvaluateAsLValue(Result, Ctx, true);
+    default:
+      llvm_unreachable("unhandled ExprValueKind");
+    }
+  }
 
   // The type of the object we're initializing is 'const T' for a class NTTP.
   QualType T = getType();

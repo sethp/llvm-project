@@ -748,6 +748,8 @@ public:
     /// evaluation is not part of the evaluation, but all other temporaries
     /// are destroyed.
     ImmediateInvocation,
+    // TODO[seth] docs
+    CrossCall,
   };
 
   /// Evaluate an expression that is required to be a constant expression. Does

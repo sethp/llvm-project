@@ -69,6 +69,12 @@ static bool CheckArrayInitialized(InterpState &S, SourceLocation Loc,
   size_t NumElems = CAT->getSize().getZExtValue();
   QualType ElemType = CAT->getElementType();
 
+  if (ElemType->isStdByteType() ||
+      ElemType->isSpecificBuiltinType(BuiltinType::UChar) ||
+      ElemType->isSpecificBuiltinType(BuiltinType::Char_U))
+    // These types are explicitly allowed to hold indeterminate values.
+    return true;
+
   if (ElemType->isRecordType()) {
     const Record *R = BasePtr.getElemRecord();
     for (size_t I = 0; I != NumElems; ++I) {
@@ -101,12 +107,18 @@ static bool CheckFieldsInitialized(InterpState &S, SourceLocation Loc,
     Pointer FieldPtr = BasePtr.atField(F.Offset);
     QualType FieldType = F.Decl->getType();
 
-    if (F.isBitField() && F.Decl->isUnnamedBitfield())
+    if (F.Decl->isUnnamedBitfield())
       // Skip padding-only fields.
       continue;
 
     if (FieldType->isIncompleteArrayType())
       // Nothing to do here.
+      continue;
+
+    if (FieldType->isStdByteType() ||
+        FieldType->isSpecificBuiltinType(BuiltinType::UChar) ||
+        FieldType->isSpecificBuiltinType(BuiltinType::Char_U))
+      // These types are explicitly allowed to hold indeterminate values.
       continue;
 
     if (FieldType->isRecordType()) {

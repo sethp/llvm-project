@@ -15,6 +15,9 @@
 #include "InterpBlock.h"
 #include "PrimType.h"
 #include "Record.h"
+#include "clang/AST/APValue.h"
+#include "clang/AST/Type.h"
+#include "llvm/ADT/SmallVector.h"
 
 using namespace clang;
 using namespace clang::interp;
@@ -240,6 +243,17 @@ std::optional<APValue> Pointer::toRValue(const ASTContext &Ctx) const {
     if (const auto *AT = Ty->getAs<AtomicType>())
       Ty = AT->getValueType();
 
+    // TODO[seth]: why here? oughtn't the ptr be zero?
+    // maybe the MTE is messing it up?
+    //
+    // MaterializeTemporaryExpr 0x55556b47a968 'nullptr_t' xvalue
+    // `- CXXNullPtrLiteralExpr 0x55556b47a8c8 'nullptr_t'
+    if (Ty->isNullPtrType()) {
+      R = APValue(static_cast<Expr *>(nullptr), CharUnits::Zero(), {}, false,
+                  true);
+      return true;
+    }
+
     // Invalid pointers.
     if (Ptr.isDummy() || !Ptr.isLive() ||
         (!Ptr.isUnknownSizeArray() && Ptr.isOnePastEnd()))
@@ -320,14 +334,25 @@ std::optional<APValue> Pointer::toRValue(const ASTContext &Ctx) const {
 
     if (const auto *AT = Ty->getAsArrayTypeUnsafe()) {
       const size_t NumElems = Ptr.getNumElems();
+      unsigned LastInitElt = 0;
+      for (unsigned I = 0; I < NumElems; ++I)
+        if (Ptr.atIndex(I).isInitialized())
+          LastInitElt = I;
+
       QualType ElemTy = AT->getElementType();
-      R = APValue(APValue::UninitArray{}, NumElems, NumElems);
+      R = APValue(APValue::UninitArray{}, LastInitElt + 1, NumElems);
+
+      // TODO[seth]: is this right in general? (probably not)
+      if (R.hasArrayFiller())
+        R.getArrayFiller() = APValue::IndeterminateValue();
 
       bool Ok = true;
-      for (unsigned I = 0; I < NumElems; ++I) {
+      for (unsigned I = 0; I < R.getArrayInitializedElts(); ++I) {
         APValue &Slot = R.getArrayInitializedElt(I);
         const Pointer &EP = Ptr.atIndex(I);
-        if (std::optional<PrimType> T = Context::classify(ElemTy, Ctx)) {
+        if (!EP.isInitialized()) {
+          Slot = APValue::IndeterminateValue();
+        } else if (std::optional<PrimType> T = Context::classify(ElemTy, Ctx)) {
           TYPE_SWITCH(*T, Slot = EP.deref<T>().toAPValue());
         } else {
           Ok &= Composite(ElemTy, EP.narrow(), Slot);
