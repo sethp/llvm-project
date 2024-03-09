@@ -140,7 +140,6 @@ protected:
 
 public:
   static bool toggleInterp();
-  const std::optional<APValue> getInterpValue() const;
 
   QualType getType() const { return TR; }
   void setType(QualType t) {
@@ -754,9 +753,9 @@ public:
 
   /// Evaluate an expression that is required to be a constant expression. Does
   /// not check the syntactic constraints for C and C++98 constant expressions.
-  bool EvaluateAsConstantExpr(EvalResult &Result, const ASTContext &Ctx,
-                              ConstantExprKind Kind = ConstantExprKind::Normal,
-                              unsigned InterpSkips = 0) const;
+  bool EvaluateAsConstantExpr(
+      EvalResult &Result, const ASTContext &Ctx,
+      ConstantExprKind Kind = ConstantExprKind::Normal) const;
 
   /// If the current Expr is a pointer, this will try to statically
   /// determine the number of bytes available where the pointer is pointing.
@@ -6654,48 +6653,6 @@ private:
   friend class ASTStmtReader;
   friend class ASTStmtWriter;
 };
-
-struct APValueExpr : public Expr {
-  const APValue &Val;
-  const Expr *OrigExpr;
-
-  APValueExpr(const APValue &Val, const Expr *OrigExpr)
-      : Expr(/*APValueExprClass*/ NoStmtClass, EmptyShell{}), Val(Val),
-        OrigExpr(OrigExpr) {
-    setDependence(OrigExpr->getDependence());
-  };
-
-  SourceLocation getBeginLoc() const LLVM_READONLY {
-    return OrigExpr->getBeginLoc();
-  }
-  SourceLocation getEndLoc() const LLVM_READONLY {
-    return OrigExpr->getEndLoc();
-  }
-
-  // Iterators
-  // TODO: or do we delegate to orig expr?
-
-  child_range children() {
-    return child_range(child_iterator(), child_iterator());
-  }
-
-  const_child_range children() const {
-    return const_child_range(const_child_iterator(), const_child_iterator());
-  }
-
-  // child_range children() { return child_range(); }
-  // const_child_range children() const { return const_child_range(&Op, &Op +
-  // 1); }
-
-  // TODO: override dump() to make it clear this is an already-interpreted value
-};
-
-inline const std::optional<APValue> Expr::getInterpValue() const {
-  // if (getStmtClass() == APValueExprClass) {
-  //   return reinterpret_cast<const APValueExpr *>(this)->Val;
-  // }
-  return std::nullopt;
-}
 
 } // end namespace clang
 

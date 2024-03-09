@@ -67,11 +67,6 @@ APValue::LValueBase APValue::LValueBase::getInterpPtr(interp::Pointer *LV) {
   return Base;
 }
 
-// APValue::LValueBase::~LValueBase() {
-//   if (is<const interp::Pointer *>())
-//     delete Val;
-// }
-
 QualType APValue::LValueBase::getType() const {
   if (!*this) return QualType();
   if (const ValueDecl *D = dyn_cast<const ValueDecl*>()) {

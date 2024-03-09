@@ -95,11 +95,6 @@ public:
   static constexpr int NumLowBitsAvailable = 3;
 };
 
-struct alignas(uintptr_t) InterpLValue {
-  // APValue *Val;
-
-  ~InterpLValue() {}
-};
 } // namespace clang
 
 namespace llvm {
@@ -125,18 +120,6 @@ template<> struct PointerLikeTypeTraits<clang::DynamicAllocLValue> {
   static constexpr int NumLowBitsAvailable =
       clang::DynamicAllocLValue::NumLowBitsAvailable;
 };
-
-// template <> struct PointerLikeTypeTraits<clang::InterpLValue> {
-//   static void *getAsVoidPointer(clang::InterpLValue V) {
-//     // return V.getOpaqueValue();
-//     return nullptr;
-//   }
-//   static clang::InterpLValue getFromVoidPointer(void *P) {
-//     // return clang::InterpLValue::getFromOpaqueValue(P);
-//     return clang::InterpLValue{};
-//   }
-//   static constexpr int NumLowBitsAvailable = 3;
-// };
 
 // since these are all forward defs, alignof(T) fails and the default falls back
 // to treating all of these as `void *`, which has a minimum alignment of only 4
@@ -197,28 +180,28 @@ public:
     AddrLabelDiff
   };
 
-  static_assert(llvm::pointer_union_detail::PointerUnionUIntTraits<
-                    TypeInfoLValue, DynamicAllocLValue>::NumLowBitsAvailable >=
-                3);
-  static_assert(
-      llvm::pointer_union_detail::PointerUnionUIntTraits<
-          const ValueDecl *, const Expr *, TypeInfoLValue, DynamicAllocLValue,
-          const interp::Pointer *>::NumLowBitsAvailable >= 3);
-
-  static_assert(
-      llvm::PointerLikeTypeTraits<const Expr *>::NumLowBitsAvailable >= 3);
-  static_assert(
-      llvm::PointerLikeTypeTraits<const ValueDecl *>::NumLowBitsAvailable >= 3);
-  static_assert(llvm::PointerLikeTypeTraits<
-                    const interp::Pointer *>::NumLowBitsAvailable >= 3);
-
   class LValueBase {
     typedef llvm::PointerUnion<const ValueDecl *, const Expr *, TypeInfoLValue,
                                DynamicAllocLValue, const interp::Pointer *>
         PtrTy;
 
-    // static_assert(typename )
-    // static_assert(PtrTy::)
+    static_assert(
+        llvm::pointer_union_detail::PointerUnionUIntTraits<
+            const ValueDecl *, const Expr *, TypeInfoLValue, DynamicAllocLValue,
+            const interp::Pointer *>::NumLowBitsAvailable >= 3);
+
+    static_assert(
+        llvm::PointerLikeTypeTraits<TypeInfoLValue>::NumLowBitsAvailable >= 3);
+    static_assert(
+        llvm::PointerLikeTypeTraits<DynamicAllocLValue>::NumLowBitsAvailable >=
+        3);
+    static_assert(
+        llvm::PointerLikeTypeTraits<const Expr *>::NumLowBitsAvailable >= 3);
+    static_assert(
+        llvm::PointerLikeTypeTraits<const ValueDecl *>::NumLowBitsAvailable >=
+        3);
+    static_assert(llvm::PointerLikeTypeTraits<
+                      const interp::Pointer *>::NumLowBitsAvailable >= 3);
 
   public:
     LValueBase() : Local{} {}
@@ -228,15 +211,16 @@ public:
     static LValueBase getTypeInfo(TypeInfoLValue LV, QualType TypeInfo);
     static LValueBase getInterpPtr(interp::Pointer *LV);
 
-    // ~LValueBase();
-
     void Profile(llvm::FoldingSetNodeID &ID) const;
 
-    template <class T> bool is() const { return Ptr.is<T>(); }
+    template <class T>
+    bool is() const { return Ptr.is<T>(); }
 
-    template <class T> T get() const { return Ptr.get<T>(); }
+    template <class T>
+    T get() const { return Ptr.get<T>(); }
 
-    template <class T> T dyn_cast() const { return Ptr.dyn_cast<T>(); }
+    template <class T>
+    T dyn_cast() const { return Ptr.dyn_cast<T>(); }
 
     void *getOpaqueValue() const;
 

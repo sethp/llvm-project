@@ -745,17 +745,7 @@ bool ByteCodeExprGen<Emitter>::VisitCastExpr(const CastExpr *CE) {
     // that didn't permit indeterminate bit patterns (i.e. anything other than
     // `unsigned char`)
     if (DiscardResult) {
-      assert(!classify(CE->getType()));
-
-      if constexpr (std::is_same<Emitter, EvalEmitter>::value)
-        this->getState().Stk.template discard<Pointer>();
-      else
-        assert(false && "todo: discard top of stack?");
-
-      // cf. (via ByteCodeExprGen<Emitter>::VisitCallExpr)
-      // // Cleanup for discarded return values.
-      // if (DiscardResult && !ReturnType->isVoidType() && T)
-      //   return this->emitPop(*T, E);
+      return this->emitPop(classify(CE->getType()).value_or(PT_Ptr), CE);
     }
     return true;
 #endif
@@ -2861,27 +2851,6 @@ ByteCodeExprGen<Emitter>::allocateLocal(DeclTy &&Src, bool IsExtended) {
   return Local.Offset;
 }
 
-// TODO[seth] is this even a good idea?
-// template <class Emitter>
-// std::optional<unsigned>
-// ByteCodeExprGen<Emitter>::allocateLocal(/* TODO: args*/ bool IsExtended) {
-//   QualType Ty;
-//   bool IsTemporary = true;
-//   Expr *Init = nullptr;
-
-//   Descriptor *D = P.createDescriptor(
-//       Src, Ty.getTypePtr(), Descriptor::InlineDescMD, Ty.isConstQualified(),
-//       IsTemporary, /*IsMutable=*/false, /* unused*/ nullptr);
-//   if (!D)
-//     return {};
-
-//   Scope::Local Local = this->createLocal(D);
-//   if (Key)
-//     Locals.insert({Key, Local});
-//   VarScope->add(Local, IsExtended);
-//   return Local.Offset;
-// }
-
 template <class Emitter>
 const RecordType *ByteCodeExprGen<Emitter>::getRecordTy(QualType Ty) {
   if (const PointerType *PT = dyn_cast<PointerType>(Ty))
@@ -3057,14 +3026,16 @@ bool ByteCodeExprGen<Emitter>::visitAPValue(const APValue &Val,
 // tomfoolery (dup/advance/etc) to fix that
 //             acktshually, that doesn't work, because this interleaves values
 //             w/ accesses; either we need to spec out the EvalExpr opcode to
-//             push its value / write to a peek'd pointer / w/e , or maybe keep
-//             it generic and leave an APValue on the stack, and then we have
+//             push its value / write to a peek'd pointer, in which case we have
+//             no choice but to implement this with direct stack manipulation
+//             once we have the value. If we wanted to keep it generic, then
+//             we'd have to leave an APValue on the stack, which would require
 //             some "convert AP Value" opcode?
 //
 //             (sort of) orthogonally: do we have a richer set of opcodes for
 //              fetching e.g. field X of a struct APValue, and then the AOT
 //              compilation pass can just emit type-specific APValue<->Interp
-//              stack?
+//              stack translation?
 template <class Emitter>
 Outcome ByteCodeExprGen<Emitter>::visitAPValue(const APValue &Val,
                                                const Expr *E,

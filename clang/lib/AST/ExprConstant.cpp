@@ -866,10 +866,6 @@ namespace {
     /// not supported by the interpreter, an error is triggered. TODO[seth] ?
     bool EnableNewConstInterp;
 
-    /// Enable the experimental new constant interpreter. If an expression is
-    /// not supported by the interpreter, an error is triggered.
-    unsigned InterpSkipsLeft = 0;
-
     /// BottomFrame - The frame in which evaluation started. This must be
     /// initialized after CurrentCall and CallStackDepth.
     CallStackFrame BottomFrame;
@@ -11760,6 +11756,10 @@ public:
   IntExprEvaluator(EvalInfo &info, APValue &result)
       : ExprEvaluatorBaseTy(info), Result(result) {}
 
+  bool Visit(const Expr *E) {
+    return static_cast<ExprEvaluatorBase<IntExprEvaluator> *>(this)->Visit(E);
+  }
+
   bool Success(const llvm::APSInt &SI, const Expr *E, APValue &Result) {
     assert(E->getType()->isIntegralOrEnumerationType() &&
            "Invalid evaluation result.");
@@ -16168,13 +16168,11 @@ static bool EvaluateDestruction(const ASTContext &Ctx, APValue::LValueBase Base,
 }
 
 bool Expr::toggleInterp() {
-  // TODO[seth]: finish this thought? (XOR other)
   return EvalInfo::InterpAllowed = !EvalInfo::InterpAllowed;
 }
 
 bool Expr::EvaluateAsConstantExpr(EvalResult &Result, const ASTContext &Ctx,
-                                  ConstantExprKind Kind,
-                                  unsigned InterpSkips) const {
+                                  ConstantExprKind Kind) const {
   assert(!isValueDependent() &&
          "Expression evaluator can't be called on a dependent expression.");
   bool IsConst;
@@ -16185,17 +16183,13 @@ bool Expr::EvaluateAsConstantExpr(EvalResult &Result, const ASTContext &Ctx,
   EvalInfo::EvaluationMode EM = EvalInfo::EM_ConstantExpression;
   EvalInfo Info(Ctx, Result, EM);
   Info.InConstantContext = true;
-  Info.InterpSkipsLeft =
-      InterpSkips; // TODO[seth] finish this thought? (XOR other)
 
-  if (Info.EnableNewConstInterp && Info.InterpSkipsLeft == 0) {
+  if (Info.EnableNewConstInterp) {
     if (!Info.Ctx.getInterpContext().evaluate(Info, this, Result.Val))
       return false;
     return CheckConstantExpression(Info, getExprLoc(),
                                    getStorageType(Ctx, this), Result.Val, Kind);
   }
-  if (Info.EnableNewConstInterp)
-    --Info.InterpSkipsLeft;
   if (Kind == ConstantExprKind::CrossCall) {
     switch (this->getValueKind()) {
     case VK_PRValue:
@@ -16208,9 +16202,9 @@ bool Expr::EvaluateAsConstantExpr(EvalResult &Result, const ASTContext &Ctx,
       assert(this->isGLValue());
       assert(false && "todo");
       // return this->EvaluateAsLValue(Result, Ctx, true);
-    default:
-      llvm_unreachable("unhandled ExprValueKind");
+      return false;
     }
+    llvm_unreachable("unhandled ExprValueKind");
   }
 
   // The type of the object we're initializing is 'const T' for a class NTTP.

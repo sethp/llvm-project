@@ -41,15 +41,8 @@ static bool RetValue(InterpState &S, CodePtr &Pt, APValue &Result) {
 // Callbacks to the classic ExprConstant interpreter
 //===----------------------------------------------------------------------===//
 
-// fixme: static? and/or move this elsewheres?
+// fixme: static? and/or move this where the EvalEmitter ought to see it?
 bool EvalExpr(InterpState &S, CodePtr &PC, const Expr *E) {
-  // const Expr *SubExpr = [E]() -> const Expr * {
-  //   if (auto *CE = llvm::dyn_cast<CastExpr>(E)) {
-  //     return CE->getSubExpr();
-  //   }
-  //   return nullptr;
-  // }();
-
   struct Toggle {
 #ifdef NDEBUG
 #define always(v)                                                              \
@@ -67,7 +60,21 @@ bool EvalExpr(InterpState &S, CodePtr &PC, const Expr *E) {
   const auto Eval = [&S](const Expr *E, Expr::EvalResult &Result) {
     Toggle InterpToggle;
     return E->EvaluateAsConstantExpr(Result, S.getContext().getASTContext(),
-                                     ConstantExprKind::CrossCall, -1);
+                                     ConstantExprKind::CrossCall);
+  };
+
+  // fixme: move the visit logic around to avoid this wrapper
+  struct oops : ByteCodeExprGen<EvalEmitter> {
+    APValue ignored;
+
+    oops(InterpState &S)
+        : ByteCodeExprGen<EvalEmitter>(S.getContext(),
+                                       S.getContext().getProgram(), S,
+                                       S.getContext().getStack(), ignored) {}
+
+    Result emitVal(APValue &Val, const Expr *E) {
+      return visitAPValue(Val, E) ? ConstOK : NonConst;
+    }
   };
 
   // TODO[seth]: there's got to be a clever-er way to do this
@@ -82,7 +89,6 @@ bool EvalExpr(InterpState &S, CodePtr &PC, const Expr *E) {
     // root); since we're mutating the cast expression this prevents us from
     // re-wrapping the ConstantExpr, but also we need to re-wrap it when the
     // args change (i.e. if it's a declref expr)
-    // if (!llvm::isa<ConstantExpr>(SubExpr)) {
     auto Arg = [&]() -> std::optional<interp::Pointer> {
       if (std::optional<PrimType> T = S.getContext().classify(SubExpr)) {
         switch (*T) {
@@ -129,21 +135,8 @@ bool EvalExpr(InterpState &S, CodePtr &PC, const Expr *E) {
       return false;
     }
 
-    // fixme: move the visit logic around to avoid this wrapper
-    struct oops : ByteCodeExprGen<EvalEmitter> {
-      APValue ignored;
-
-      oops(InterpState &S)
-          : ByteCodeExprGen<EvalEmitter>(S.getContext(),
-                                         S.getContext().getProgram(), S,
-                                         S.getContext().getStack(), ignored) {}
-
-      Result push(APValue &Val, const Expr *E) {
-        return visitAPValue(Val, E) ? ConstOK : NonConst;
-      }
-    };
     oops C(S);
-    auto RV = C.push(R.Val, E);
+    auto RV = C.emitVal(R.Val, E);
     // TODO[seth]: what does it mean to successfully produce an indeterminate
     // value, as far as our stack state goes?
     //
@@ -160,30 +153,8 @@ bool EvalExpr(InterpState &S, CodePtr &PC, const Expr *E) {
       S.addNotes(Notes);
       return false;
     }
-
-    // fixme: move the visit logic around to avoid this wrapper
-    struct oops : ByteCodeExprGen<EvalEmitter> {
-      APValue ignored;
-
-      oops(InterpState &S)
-          : ByteCodeExprGen<EvalEmitter>(S.getContext(),
-                                         S.getContext().getProgram(), S,
-                                         S.getContext().getStack(), ignored) {}
-
-      Result push(APValue &Val, const Expr *E) {
-        return visitAPValue(Val, E) ? ConstOK : NonConst;
-      }
-    };
     oops C(S);
-    auto RV = C.push(R.Val, E);
-    // TODO[seth]: what does it mean to successfully produce an indeterminate
-    // value, as far as our stack state goes?
-    //
-    // something like: if it's a field in a container type, then we're allowed
-    // to proceed (always?), because it's OK as long as it's not accessed?
-    assert(RV == Result::ConstOK || R.Val.isIndeterminate());
-    // return C.push(R.Val, E);
-    return RV == Result::ConstOK;
+    return C.emitVal(R.Val, E);
   }
 
   llvm::SmallString<20> Err("unhandled StmtClass: ");
