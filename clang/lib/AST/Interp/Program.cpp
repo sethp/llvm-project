@@ -416,6 +416,7 @@ Descriptor *Program::createDescriptor(const DeclTy &D, const Type *Ty,
       case PT_Uint32:
       case PT_Sint64:
       case PT_Uint64:
+      case PT_Bool:
         // always
         return Definitely;
       case PT_Float: {
@@ -427,8 +428,6 @@ Descriptor *Program::createDescriptor(const DeclTy &D, const Type *Ty,
         // but maybe not `half` or `long double`
         return NotYet;
       }
-      case PT_Bool:
-        return NotYet;
       case PT_IntAP:
       case PT_IntAPS:
       case PT_Ptr:

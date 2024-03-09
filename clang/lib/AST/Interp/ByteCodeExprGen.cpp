@@ -2428,6 +2428,7 @@ template <class Emitter> bool ByteCodeExprGen<Emitter>::visit(const Expr *E) {
   if (E->getType()->isVoidType())
     return this->discard(E);
 
+  // TODO[seth] do we need to do this for vector types too?
   // Create local variable to hold the return value.
   if (!E->isGLValue() && !E->getType()->isAnyComplexType() &&
       !classify(E->getType())) {
@@ -2845,7 +2846,7 @@ ByteCodeExprGen<Emitter>::allocateLocal(DeclTy &&Src, bool IsExtended) {
       Src, Ty.getTypePtr(), Descriptor::InlineDescMD, Ty.isConstQualified(),
       IsTemporary, /*IsMutable=*/false, Init);
   if (!D)
-    return {};
+    return {}; // TODO[seth]: this is a frequent "confusion point"
 
   Scope::Local Local = this->createLocal(D);
   if (Key)

@@ -68,6 +68,11 @@ typedef decltype(nullptr) nullptr_t;
 
 namespace test_vector {
 
+typedef bool bool8 __attribute__((ext_vector_type(8)));
+
+static_assert(bit_cast<unsigned char>(bool8{1,0,1,0,1,0,1,0}) == (LITTLE_END ? 0x55 : 0xAA));
+
+
 typedef unsigned uint2 __attribute__((vector_size(2 * sizeof(unsigned))));
 typedef char byte8 __attribute__((vector_size(sizeof(unsigned long long))));
 

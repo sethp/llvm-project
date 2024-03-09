@@ -83,7 +83,6 @@ bool EvalExpr(InterpState &S, CodePtr &PC, const Expr *E) {
     // re-wrapping the ConstantExpr, but also we need to re-wrap it when the
     // args change (i.e. if it's a declref expr)
     // if (!llvm::isa<ConstantExpr>(SubExpr)) {
-
     auto Arg = [&]() -> std::optional<interp::Pointer> {
       if (std::optional<PrimType> T = S.getContext().classify(SubExpr)) {
         switch (*T) {
