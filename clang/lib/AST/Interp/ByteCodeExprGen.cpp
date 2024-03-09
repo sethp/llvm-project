@@ -1408,6 +1408,12 @@ bool ByteCodeExprGen<Emitter>::VisitInitListExpr(const InitListExpr *E) {
   }
 
   if (T->isVectorType()) {
+    // TODO[seth]: this is incomplete: it only works when the entire vector
+    // initialization is self-contained and doesn't reference any state outside
+    // of the subexpr.
+    //
+    // That's good enough for the `constexpr-builtin-bit-cast.cpp` tests, but it
+    // does overpromise, and will probably fail in weird ways.
     return this->emitEvalExpr(E, E);
   }
 
