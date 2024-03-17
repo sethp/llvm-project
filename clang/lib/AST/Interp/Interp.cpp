@@ -154,7 +154,7 @@ bool EvalExpr(InterpState &S, CodePtr &PC, const Expr *E) {
       return false;
     }
     oops C(S);
-    return C.emitVal(R.Val, E);
+    return C.emitVal(R.Val, E) == Result::ConstOK;
   }
 
   llvm::SmallString<20> Err("unhandled StmtClass: ");
