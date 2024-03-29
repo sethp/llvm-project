@@ -84,7 +84,8 @@ void test_record() {
   struct tuple4 {
     unsigned x, y, z, doublez;
 
-    constexpr bool operator==(tuple4 const &other) const {
+    bool operator==(tuple4 const &other) const = default;
+    constexpr bool operator==(bases const &other) const {
       return x == other.x && y == other.y &&
              z == other.z && doublez == other.doublez;
     }
@@ -93,6 +94,9 @@ void test_record() {
   constexpr tuple4 t4 = bit_cast<tuple4>(b);
   static_assert(t4 == tuple4{1, 2, 3, 4});
   static_assert(round_trip<tuple4>(b) == b);
+
+  constexpr auto b2 = bit_cast<bases>(t4);
+  static_assert(t4 == b2);
 }
 
 void test_partially_initialized() {
@@ -397,14 +401,14 @@ void bitfield_indeterminate() {
     std::byte b1 : 4;
     std::byte b2 : 4;
   };
-  constexpr auto g = [f]() constexpr {
+  constexpr auto g = [](auto f) constexpr {
     return bit_cast<B>(f());
   };
-  static_assert(g().s0 + g().s1 + g().b0 + g().b1 == 0xc0 + 0xff + 0xe + 0xe);
+  static_assert(g(f).s0 + g(f).s1 + g(f).b0 + g(f).b1 == 0xc0 + 0xff + 0xe + 0xe);
   {
     // expected-error@+2 {{initialized by a constant expression}}
     // expected-note@+1 {{read of uninitialized object is not allowed in a constant expression}}
-    constexpr auto _bad = g().b2;
+    constexpr auto _bad = g(f).b2;
   }
 }
 
@@ -524,7 +528,7 @@ typedef decltype(nullptr) nullptr_t;
 // expected-note@+3 {{indeterminate value can only initialize an object of type 'unsigned char' or 'std::byte'; 'unsigned long' is invalid}}
 #endif
 // expected-error@+1 {{constexpr variable 'test_from_nullptr' must be initialized by a constant expression}}
-constexpr unsigned long test_from_nullptr = __builtin_bit_cast(unsigned long, nullptr);
+constexpr unsigned long test_from_nullptr = (__builtin_bit_cast(unsigned long, nullptr), 0);
 
 constexpr int test_from_nullptr_pass = (__builtin_bit_cast(unsigned char[8], nullptr), 0);
 

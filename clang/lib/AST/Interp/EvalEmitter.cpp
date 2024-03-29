@@ -11,6 +11,7 @@
 #include "Context.h"
 #include "IntegralAP.h"
 #include "Interp.h"
+#include "Interp/Source.h"
 #include "Opcode.h"
 #include "clang/AST/DeclCXX.h"
 
@@ -191,6 +192,13 @@ bool EvalEmitter::emitDestroy(uint32_t I, const SourceInfo &Info) {
   }
 
   return true;
+}
+
+bool EvalExpr(InterpState &S, CodePtr &PC, const Expr *E);
+
+bool EvalEmitter::emitEvalExpr(const Expr *E, const SourceInfo &Info) {
+  CodePtr PC;
+  return EvalExpr(getState(), PC, E);
 }
 
 //===----------------------------------------------------------------------===//

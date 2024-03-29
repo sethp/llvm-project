@@ -22,6 +22,7 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/Basic/TargetInfo.h"
+#include <optional>
 
 namespace clang {
 class QualType;
@@ -35,6 +36,33 @@ template <class Emitter> class DeclScope;
 template <class Emitter> class OptionScope;
 template <class Emitter> class ArrayIndexScope;
 template <class Emitter> class SourceLocScope;
+
+struct Outcome {
+  enum {
+    /// Everything went fine, we produced a constant value
+    Ok,
+    /// We found something that is prohibited from producing a constant value
+    /// (i.e. UB)
+    NotConst,
+    /// We successfully produced no value
+    NoVal,
+
+    /// We have not (yet) implemented constant value production for some part of
+    /// this expression
+    NotImplemented,
+
+    // TODO[seth]: distinguish this more clearly from NotImplemented or (later)
+    // NotSupported
+    // TODO[seth]: this'd work best with some kind of "here's the clang
+    // issue/DR/example/whatever" that makes this tricky
+    /// We don't know if this is a reasonable combination to support.
+    Unknown,
+  } Res;
+
+  constexpr Outcome(decltype(Res) Res) : Res(Res) {}
+  constexpr Outcome(bool B) : Res(B ? Ok : NotConst) {}
+  constexpr operator bool() const { return Res == Ok; }
+}; // namespace interp
 
 /// Compilation context for expressions.
 template <class Emitter>
@@ -164,6 +192,9 @@ protected:
   bool visitVarDecl(const VarDecl *VD);
   /// Visit an APValue.
   bool visitAPValue(const APValue &Val, PrimType ValType, const Expr *E);
+
+  Outcome visitAPValue(const APValue &Val, const Expr *E,
+                       std::optional<QualType> ValTy = std::nullopt);
 
   /// Visits an expression and converts it to a boolean.
   bool visitBool(const Expr *E);

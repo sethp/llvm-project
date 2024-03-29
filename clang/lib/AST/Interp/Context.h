@@ -73,6 +73,8 @@ public:
   /// Classifies a type.
   std::optional<PrimType> classify(QualType T) const;
 
+  static std::optional<PrimType> classify(QualType T, const ASTContext &Ctx);
+
   /// Classifies an expression.
   std::optional<PrimType> classify(const Expr *E) const {
     if (E->isGLValue()) {

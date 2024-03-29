@@ -35,16 +35,28 @@ namespace llvm {
 
 class FoldingSetNodeID;
 
+// TODO[seth]: move this elsewhere so this file can still see it without
+// requiring
+//   an #include<APValue.h> ?
+//
+// NB: it's kind of unnecessary, since this only uses two bits anyway
+// (guaranteed by the void* fallback):
+//
+// ```c++
+// llvm::PointerUnion<TemplateTemplateArgLocInfo *, Expr *, TypeSourceInfo *>
+//   Pointer;
+// ```
+//
 // Provide PointerLikeTypeTraits for clang::Expr*, this default one requires a
 // full definition of Expr, but this file only sees a forward del because of
 // the dependency.
-template <> struct PointerLikeTypeTraits<clang::Expr *> {
-  static inline void *getAsVoidPointer(clang::Expr *P) { return P; }
-  static inline clang::Expr *getFromVoidPointer(void *P) {
-    return static_cast<clang::Expr *>(P);
-  }
-  static constexpr int NumLowBitsAvailable = 2;
-};
+// template <> struct PointerLikeTypeTraits<clang::Expr *> {
+//   static inline void *getAsVoidPointer(clang::Expr *P) { return P; }
+//   static inline clang::Expr *getFromVoidPointer(void *P) {
+//     return static_cast<clang::Expr *>(P);
+//   }
+//   static constexpr int NumLowBitsAvailable = 3;
+// };
 
 } // namespace llvm
 

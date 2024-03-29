@@ -57,6 +57,7 @@ template <typename T> struct PointerLikeTypeTraits<T *> {
   static inline void *getAsVoidPointer(T *P) { return P; }
   static inline T *getFromVoidPointer(void *P) { return static_cast<T *>(P); }
 
+  // TODO[seth]: unsigned?
   static constexpr int NumLowBitsAvailable =
       detail::ConstantLog2<alignof(T)>::value;
 };

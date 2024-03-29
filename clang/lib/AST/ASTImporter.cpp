@@ -10263,6 +10263,7 @@ ASTNodeImporter::ImportAPValue(const APValue &FromValue) {
     APValue::LValueBase Base;
     QualType FromElemTy;
     if (FromValue.getLValueBase()) {
+      // TODO[seth]: what about interp::Pointer?
       assert(!FromValue.getLValueBase().is<DynamicAllocLValue>() &&
              "in C++20 dynamic allocation are transient so they shouldn't "
              "appear in the AST");

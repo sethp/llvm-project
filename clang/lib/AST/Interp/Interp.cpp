@@ -7,27 +7,160 @@
 //===----------------------------------------------------------------------===//
 
 #include "Interp.h"
-#include <limits>
-#include <vector>
 #include "Function.h"
+#include "Interp/ByteCodeExprGen.h"
+#include "Interp/EvalEmitter.h"
 #include "InterpFrame.h"
 #include "InterpStack.h"
 #include "Opcode.h"
 #include "PrimType.h"
 #include "Program.h"
 #include "State.h"
+#include "clang/AST/APValue.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/ASTDiagnostic.h"
 #include "clang/AST/CXXInheritance.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "llvm/ADT/APSInt.h"
+#include "llvm/ADT/SmallString.h"
+#include "llvm/Support/Casting.h"
+#include "llvm/Support/ErrorHandling.h"
+#include <cassert>
+#include <limits>
+#include <vector>
 
 using namespace clang;
 using namespace clang::interp;
 
 static bool RetValue(InterpState &S, CodePtr &Pt, APValue &Result) {
   llvm::report_fatal_error("Interpreter cannot return values");
+}
+
+//===----------------------------------------------------------------------===//
+// Callbacks to the classic ExprConstant interpreter
+//===----------------------------------------------------------------------===//
+
+// fixme: static? and/or move this where the EvalEmitter ought to see it?
+bool EvalExpr(InterpState &S, CodePtr &PC, const Expr *E) {
+  struct Toggle {
+#ifdef NDEBUG
+#define always(v)                                                              \
+  { v; }
+#else
+#define always(v) assert(v)
+#endif
+    Toggle() { always(!Expr::toggleInterp()); }
+    ~Toggle() { always(Expr::toggleInterp()); }
+#undef always
+  };
+  SmallVector<PartialDiagnosticAt, 2> Notes;
+  Expr::EvalResult R;
+  R.Diag = &Notes;
+  const auto Eval = [&S](const Expr *E, Expr::EvalResult &Result) {
+    Toggle InterpToggle;
+    return E->EvaluateAsConstantExpr(Result, S.getContext().getASTContext());
+  };
+
+  // fixme: move the visit logic around to avoid this wrapper
+  struct oops : ByteCodeExprGen<EvalEmitter> {
+    APValue ignored;
+
+    oops(InterpState &S)
+        : ByteCodeExprGen<EvalEmitter>(S.getContext(),
+                                       S.getContext().getProgram(), S,
+                                       S.getContext().getStack(), ignored) {}
+
+    Result emitVal(APValue &Val, const Expr *E) {
+      return visitAPValue(Val, E) ? ConstOK : NonConst;
+    }
+  };
+
+  // TODO[seth]: there's got to be a clever-er way to do this
+  // something like: if E has a subexpr, then pop stuff, otherwise just call it
+  // ?
+  //                  (don't forget about multiple chilrens)
+  if (auto *CE = llvm::dyn_cast<CastExpr>(E)) {
+    const Expr *SubExpr = CE->getSubExpr();
+    assert(!SubExpr->getType()->isVoidType());
+
+    // TODO[seth]: sometimes we eval the same tree multiple times (from the
+    // root); since we're mutating the cast expression this prevents us from
+    // re-wrapping the ConstantExpr, but also we need to re-wrap it when the
+    // args change (i.e. if it's a declref expr)
+    auto Arg = [&]() -> std::optional<interp::Pointer> {
+      if (std::optional<PrimType> T = S.getContext().classify(SubExpr)) {
+        switch (*T) {
+        case PT_Ptr:
+          // return S.Stk.template pop<Pointer>().toRValue(S.getCtx());
+          return S.Stk.template pop<Pointer>();
+
+        // case PT_Bool:
+        //   return S.Stk.template pop<PrimConv<PT_Bool>::T>().toAPValue();
+        default:
+          assert(false && "todo: prim type");
+        }
+        llvm_unreachable("unhandled prim type");
+      } else
+        assert(false && "todo: not a prim type");
+    }();
+    assert(Arg && "todo?");
+    // if (!Arg) {
+    //   return false;
+    // }
+
+    auto Val = APValue(APValue::LValueBase::getInterpPtr(&*Arg),
+                       CharUnits::Zero(), {}, false, Arg->isZero());
+
+    // TODO[seth]: where does this get cleaned up?
+    auto *InterpExpr = ConstantExpr::Create(S.getContext().getASTContext(),
+                                            const_cast<Expr *>(SubExpr), Val);
+
+    struct WithSubExpr {
+      CastExpr *CE;
+      Expr *SavedSubExpr;
+      WithSubExpr(CastExpr *CE, Expr *SubExpr)
+          : CE(CE), SavedSubExpr(CE->getSubExpr()) {
+        CE->setSubExpr(SubExpr);
+      }
+      ~WithSubExpr() { CE->setSubExpr(SavedSubExpr); }
+    };
+
+    WithSubExpr RAII_Thing(const_cast<CastExpr *>(CE), InterpExpr);
+
+    if (!Eval(CE, R)) {
+      S.setActiveDiagnostic(true);
+      S.addNotes(Notes);
+      return false;
+    }
+
+    oops C(S);
+    auto RV = C.emitVal(R.Val, E);
+    // TODO[seth]: what does it mean to successfully produce an indeterminate
+    // value, as far as our stack state goes?
+    //
+    // something like: if it's a field in a container type, then we're allowed
+    // to proceed (when?), because it's OK as long as it's not accessed?
+    assert(RV == Result::ConstOK || R.Val.isIndeterminate());
+    // return C.push(R.Val, E);
+    return RV == Result::ConstOK;
+  }
+
+  if (const auto *ILE = llvm::dyn_cast<InitListExpr>(E)) {
+    if (!Eval(ILE, R)) {
+      S.setActiveDiagnostic(true);
+      S.addNotes(Notes);
+      return false;
+    }
+    oops C(S);
+    return C.emitVal(R.Val, E) == Result::ConstOK;
+  }
+
+  llvm::SmallString<20> Err("unhandled StmtClass: ");
+  Err += E->getStmtClassName();
+  assert(false &&
+         "fatal error, but report_fatal_error just kinda swallows it up");
+  llvm::report_fatal_error(Err.data());
 }
 
 //===----------------------------------------------------------------------===//

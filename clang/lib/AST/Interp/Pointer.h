@@ -15,11 +15,13 @@
 
 #include "Descriptor.h"
 #include "InterpBlock.h"
+#include "clang/AST/ASTContext.h"
 #include "clang/AST/ComparisonCategories.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/Expr.h"
 #include "llvm/ADT/PointerUnion.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace clang {
@@ -98,7 +100,7 @@ public:
   }
 
   /// Converts the pointer to an APValue that is an rvalue.
-  std::optional<APValue> toRValue(const Context &Ctx) const;
+  std::optional<APValue> toRValue(const ASTContext &Ctx) const;
 
   /// Offsets a pointer inside an array.
   [[nodiscard]] Pointer atIndex(unsigned Idx) const {
@@ -245,9 +247,12 @@ public:
         return AT->getElementType();
       if (const auto *CT = getFieldDesc()->getType()->getAs<ComplexType>())
         return CT->getElementType();
+      // TODO[seth]: vector types?
     }
     return getFieldDesc()->getType();
   }
+
+  LLVM_DUMP_METHOD void dump() const;
 
   [[nodiscard]] Pointer getDeclPtr() const { return Pointer(Pointee); }
 
@@ -494,6 +499,12 @@ inline llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, const Pointer &P) {
   P.print(OS);
   return OS;
 }
+
+// PointerLikeTypeTraits is specialized so it can be used with a forward-decl of
+// Pointer. Verify that we got it right.
+static_assert(llvm::PointerLikeTypeTraits<Pointer *>::NumLowBitsAvailable <=
+                  llvm::detail::ConstantLog2<alignof(Pointer)>::value,
+              "PointerLikeTypeTraits<Pointer *> assumes too much alignment.");
 
 } // namespace interp
 } // namespace clang

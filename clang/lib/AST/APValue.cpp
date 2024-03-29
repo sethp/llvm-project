@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/AST/APValue.h"
+#include "Interp/Pointer.h"
 #include "Linkage.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/CharUnits.h"
@@ -60,6 +61,12 @@ APValue::LValueBase APValue::LValueBase::getTypeInfo(TypeInfoLValue LV,
   return Base;
 }
 
+APValue::LValueBase APValue::LValueBase::getInterpPtr(interp::Pointer *LV) {
+  LValueBase Base;
+  Base.Ptr = LV;
+  return Base;
+}
+
 QualType APValue::LValueBase::getType() const {
   if (!*this) return QualType();
   if (const ValueDecl *D = dyn_cast<const ValueDecl*>()) {
@@ -85,7 +92,10 @@ QualType APValue::LValueBase::getType() const {
   if (is<DynamicAllocLValue>())
     return getDynamicAllocType();
 
-  const Expr *Base = get<const Expr*>();
+  if (const auto *Ptr = dyn_cast<const interp::Pointer *>())
+    return Ptr->getType();
+
+  const Expr *Base = get<const Expr *>();
 
   // For a materialized temporary, the type of the temporary we materialized
   // may not be the type of the expression.
@@ -106,12 +116,11 @@ QualType APValue::LValueBase::getType() const {
 }
 
 unsigned APValue::LValueBase::getCallIndex() const {
-  return (is<TypeInfoLValue>() || is<DynamicAllocLValue>()) ? 0
-                                                            : Local.CallIndex;
+  return hasLocal() ? Local.CallIndex : 0;
 }
 
 unsigned APValue::LValueBase::getVersion() const {
-  return (is<TypeInfoLValue>() || is<DynamicAllocLValue>()) ? 0 : Local.Version;
+  return hasLocal() ? Local.Version : 0;
 }
 
 QualType APValue::LValueBase::getTypeInfoType() const {
@@ -124,9 +133,15 @@ QualType APValue::LValueBase::getDynamicAllocType() const {
   return QualType::getFromOpaquePtr(DynamicAllocType);
 }
 
+APValue *APValue::LValueBase::getInterpRVal(ASTContext &Ctx) {
+  assert(is<const interp::Pointer *>() && "not an interp::Pointer");
+  Val = new APValue(*(get<const interp::Pointer *>()->toRValue(Ctx)));
+  return Val;
+}
+
 void APValue::LValueBase::Profile(llvm::FoldingSetNodeID &ID) const {
   ID.AddPointer(Ptr.getOpaqueValue());
-  if (is<TypeInfoLValue>() || is<DynamicAllocLValue>())
+  if (!hasLocal())
     return;
   ID.AddInteger(Local.CallIndex);
   ID.AddInteger(Local.Version);
@@ -137,7 +152,7 @@ bool operator==(const APValue::LValueBase &LHS,
                 const APValue::LValueBase &RHS) {
   if (LHS.Ptr != RHS.Ptr)
     return false;
-  if (LHS.is<TypeInfoLValue>() || LHS.is<DynamicAllocLValue>())
+  if (!LHS.hasLocal())
     return true;
   return LHS.Local.CallIndex == RHS.Local.CallIndex &&
          LHS.Local.Version == RHS.Local.Version;
@@ -200,7 +215,7 @@ llvm::DenseMapInfo<clang::APValue::LValueBase>::getTombstoneKey() {
 
 namespace clang {
 llvm::hash_code hash_value(const APValue::LValueBase &Base) {
-  if (Base.is<TypeInfoLValue>() || Base.is<DynamicAllocLValue>())
+  if (!Base.hasLocal())
     return llvm::hash_value(Base.getOpaqueValue());
   return llvm::hash_combine(Base.getOpaqueValue(), Base.getCallIndex(),
                             Base.getVersion());
@@ -1184,6 +1199,7 @@ LinkageInfo LinkageComputer::getLVForValue(const APValue &V,
       if (MergeLV(getLVForDecl(MTE->getExtendingDecl(), computation)))
         break;
     } else {
+      // TODO[seth]: what about interp::Pointer?
       assert(V.getLValueBase().is<DynamicAllocLValue>() &&
              "unexpected LValueBase kind");
       return LinkageInfo::internal();

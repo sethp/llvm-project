@@ -10,7 +10,9 @@
 #include "Boolean.h"
 #include "Floating.h"
 #include "Integral.h"
+#include "Interp/PrimType.h"
 #include "Pointer.h"
+#include "llvm/Support/Compiler.h"
 #include <cassert>
 #include <cstdlib>
 
@@ -84,7 +86,7 @@ void InterpStack::shrink(size_t Size) {
   StackSize -= Size;
 }
 
-void InterpStack::dump() const {
+LLVM_DUMP_METHOD void InterpStack::dump() const {
 #ifndef NDEBUG
   llvm::errs() << "Items: " << ItemTypes.size() << ". Size: " << size() << '\n';
   if (ItemTypes.empty())
@@ -103,9 +105,88 @@ void InterpStack::dump() const {
       const T &V = peek<T>(Offset);
       llvm::errs() << V;
     });
-    llvm::errs() << '\n';
+    if (*TyIt == PT_Ptr) {
+      if (peek<Pointer>(Offset).isZero())
+        llvm::errs() << "\tnullptr\n";
+      else
+        llvm::errs() << "\t*(" << peek<Pointer>(Offset).getType() << ")\n";
+      continue;
+    }
+
+    llvm::errs() << "\t<";
+    switch (*TyIt) {
+    case PT_Sint8: {
+      llvm::errs() << "PT_Sint8";
+      break;
+    }
+    case PT_Uint8: {
+      llvm::errs() << "PT_Uint8";
+      break;
+    }
+    case PT_Sint16: {
+      llvm::errs() << "PT_Sint16";
+      break;
+    }
+    case PT_Uint16: {
+      llvm::errs() << "PT_Uint16";
+      break;
+    }
+    case PT_Sint32: {
+      llvm::errs() << "PT_Sint32";
+      break;
+    }
+    case PT_Uint32: {
+      llvm::errs() << "PT_Uint32";
+      break;
+    }
+    case PT_Sint64: {
+      llvm::errs() << "PT_Sint64";
+      break;
+    }
+    case PT_Uint64: {
+      llvm::errs() << "PT_Uint64";
+      break;
+    }
+    case PT_IntAP: {
+      llvm::errs() << "PT_IntAP";
+      break;
+    }
+    case PT_IntAPS: {
+      llvm::errs() << "PT_IntAPS";
+      break;
+    }
+    case PT_Float: {
+      llvm::errs() << "PT_Float";
+      break;
+    }
+    case PT_Bool: {
+      llvm::errs() << "PT_Bool";
+      break;
+    }
+    case PT_Ptr: {
+      llvm::errs() << "PT_Ptr";
+      break;
+    }
+    case PT_FnPtr: {
+      llvm::errs() << "PT_FnPtr";
+      break;
+    }
+    }
+    llvm::errs() << ">\n";
 
     ++Index;
   }
 #endif
 }
+
+#ifndef NDEBUG
+const Pointer &InterpStack::peekPtr(size_t Skips) const {
+  assert(ItemTypes.size() > Skips);
+  size_t Offset = align(primSize(PT_Ptr));
+  auto I = ItemTypes.rbegin(), E = ItemTypes.rend();
+  for (; Skips > 0 && I != E; ++I, --Skips)
+    Offset += align(primSize(*I));
+  assert(I < E && *I == PT_Ptr);
+  return peek<Pointer>(Offset);
+}
+#endif

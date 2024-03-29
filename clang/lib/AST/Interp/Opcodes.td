@@ -60,6 +60,7 @@ def ArgCallExpr : ArgType { let Name = "const CallExpr *"; }
 def ArgOffsetOfExpr : ArgType { let Name = "const OffsetOfExpr *"; }
 def ArgDeclRef : ArgType { let Name = "const DeclRefExpr *"; }
 def ArgCCI : ArgType { let Name = "const ComparisonCategoryInfo *"; }
+def ArgExpr : ArgType { let Name = "const Expr *"; }
 
 //===----------------------------------------------------------------------===//
 // Classes of types instructions operate on.
@@ -143,6 +144,16 @@ class FloatOpcode : Opcode {
 class IntegerOpcode : Opcode {
   let Types = [IntegerTypeClass];
   let HasGroup = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Back-compat opcodes
+//===----------------------------------------------------------------------===//
+
+def EvalExpr : Opcode {
+  // let Types = [APValue];
+  let Args = [ArgExpr];
+  let HasCustomEval = 1;
 }
 
 //===----------------------------------------------------------------------===//

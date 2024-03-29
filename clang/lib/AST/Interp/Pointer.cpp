@@ -15,6 +15,9 @@
 #include "InterpBlock.h"
 #include "PrimType.h"
 #include "Record.h"
+#include "clang/AST/APValue.h"
+#include "clang/AST/Type.h"
+#include "llvm/ADT/SmallVector.h"
 
 using namespace clang;
 using namespace clang::interp;
@@ -233,7 +236,7 @@ bool Pointer::hasSameArray(const Pointer &A, const Pointer &B) {
   return hasSameBase(A, B) && A.Base == B.Base && A.getFieldDesc()->IsArray;
 }
 
-std::optional<APValue> Pointer::toRValue(const Context &Ctx) const {
+std::optional<APValue> Pointer::toRValue(const ASTContext &Ctx) const {
   // Method to recursively traverse composites.
   std::function<bool(QualType, const Pointer &, APValue &)> Composite;
   Composite = [&Composite, &Ctx](QualType Ty, const Pointer &Ptr, APValue &R) {
@@ -246,7 +249,7 @@ std::optional<APValue> Pointer::toRValue(const Context &Ctx) const {
       return false;
 
     // Primitive values.
-    if (std::optional<PrimType> T = Ctx.classify(Ty)) {
+    if (std::optional<PrimType> T = Context::classify(Ty, Ctx)) {
       if (T == PT_Ptr || T == PT_FnPtr) {
         R = Ptr.toAPValue();
       } else {
@@ -267,7 +270,7 @@ std::optional<APValue> Pointer::toRValue(const Context &Ctx) const {
           const Pointer &FP = Ptr.atField(F.Offset);
           QualType FieldTy = F.Decl->getType();
           if (FP.isActive()) {
-            if (std::optional<PrimType> T = Ctx.classify(FieldTy)) {
+            if (std::optional<PrimType> T = Context::classify(FieldTy, Ctx)) {
               TYPE_SWITCH(*T, Value = FP.deref<T>().toAPValue());
             } else {
               Ok &= Composite(FieldTy, FP, Value);
@@ -289,7 +292,7 @@ std::optional<APValue> Pointer::toRValue(const Context &Ctx) const {
           const Pointer &FP = Ptr.atField(FD->Offset);
           APValue &Value = R.getStructField(I);
 
-          if (std::optional<PrimType> T = Ctx.classify(FieldTy)) {
+          if (std::optional<PrimType> T = Context::classify(FieldTy, Ctx)) {
             TYPE_SWITCH(*T, Value = FP.deref<T>().toAPValue());
           } else {
             Ok &= Composite(FieldTy, FP, Value);
@@ -298,14 +301,14 @@ std::optional<APValue> Pointer::toRValue(const Context &Ctx) const {
 
         for (unsigned I = 0; I < NB; ++I) {
           const Record::Base *BD = Record->getBase(I);
-          QualType BaseTy = Ctx.getASTContext().getRecordType(BD->Decl);
+          QualType BaseTy = Ctx.getRecordType(BD->Decl);
           const Pointer &BP = Ptr.atField(BD->Offset);
           Ok &= Composite(BaseTy, BP, R.getStructBase(I));
         }
 
         for (unsigned I = 0; I < NV; ++I) {
           const Record::Base *VD = Record->getVirtualBase(I);
-          QualType VirtBaseTy = Ctx.getASTContext().getRecordType(VD->Decl);
+          QualType VirtBaseTy = Ctx.getRecordType(VD->Decl);
           const Pointer &VP = Ptr.atField(VD->Offset);
           Ok &= Composite(VirtBaseTy, VP, R.getStructBase(NB + I));
         }
@@ -320,14 +323,25 @@ std::optional<APValue> Pointer::toRValue(const Context &Ctx) const {
 
     if (const auto *AT = Ty->getAsArrayTypeUnsafe()) {
       const size_t NumElems = Ptr.getNumElems();
+      unsigned LastInitElt = 0;
+      for (unsigned I = 0; I < NumElems; ++I)
+        if (Ptr.atIndex(I).isInitialized())
+          LastInitElt = I;
+
       QualType ElemTy = AT->getElementType();
-      R = APValue(APValue::UninitArray{}, NumElems, NumElems);
+      R = APValue(APValue::UninitArray{}, LastInitElt + 1, NumElems);
+
+      // TODO[seth]: is this right in general? (probably not)
+      if (R.hasArrayFiller())
+        R.getArrayFiller() = APValue::IndeterminateValue();
 
       bool Ok = true;
-      for (unsigned I = 0; I < NumElems; ++I) {
+      for (unsigned I = 0; I < R.getArrayInitializedElts(); ++I) {
         APValue &Slot = R.getArrayInitializedElt(I);
         const Pointer &EP = Ptr.atIndex(I);
-        if (std::optional<PrimType> T = Ctx.classify(ElemTy)) {
+        if (!EP.isInitialized()) {
+          Slot = APValue::IndeterminateValue();
+        } else if (std::optional<PrimType> T = Context::classify(ElemTy, Ctx)) {
           TYPE_SWITCH(*T, Slot = EP.deref<T>().toAPValue());
         } else {
           Ok &= Composite(ElemTy, EP.narrow(), Slot);
@@ -339,7 +353,7 @@ std::optional<APValue> Pointer::toRValue(const Context &Ctx) const {
     // Complex types.
     if (const auto *CT = Ty->getAs<ComplexType>()) {
       QualType ElemTy = CT->getElementType();
-      std::optional<PrimType> ElemT = Ctx.classify(ElemTy);
+      std::optional<PrimType> ElemT = Context::classify(ElemTy, Ctx);
       assert(ElemT);
 
       if (ElemTy->isIntegerType()) {
@@ -357,6 +371,34 @@ std::optional<APValue> Pointer::toRValue(const Context &Ctx) const {
       return false;
     }
 
+    // Vector types.
+    if (const auto *VT = Ty->getAs<VectorType>()) {
+      QualType ElemTy = VT->getElementType();
+      std::optional<PrimType> ElemT = Context::classify(ElemTy, Ctx);
+      const size_t NumElems = Ptr.getNumElems();
+      assert(ElemT);
+      assert(Ptr.isArrayRoot());
+      assert(VT->getNumElements() == NumElems);
+
+      llvm::SmallVector<APValue, 8> Elts;
+      Elts.reserve(NumElems);
+      for (unsigned I = 0; I < NumElems; ++I) {
+        APValue &Elt = Elts.emplace_back();
+        if (!Ptr.isInitialized()) {
+          Elt = APValue::IndeterminateValue();
+        } else if (ElemTy->isIntegerType()) {
+          INT_TYPE_SWITCH(
+              *ElemT, { Elt = APValue(Ptr.atIndex(I).deref<T>().toAPSInt()); });
+        } else if (ElemTy->isFloatingType()) {
+          Elt = APValue(Ptr.atIndex(I).deref<Floating>().getAPFloat());
+        }
+      }
+
+      R = APValue(Elts.data(), NumElems);
+
+      return true;
+    }
+
     llvm_unreachable("invalid value to return");
   };
 
@@ -372,4 +414,9 @@ std::optional<APValue> Pointer::toRValue(const Context &Ctx) const {
   if (!Composite(getType(), *this, Result))
     return std::nullopt;
   return Result;
+}
+
+void Pointer::dump() const {
+  llvm::errs() << "interp::Pointer -> ";
+  getType().dump();
 }

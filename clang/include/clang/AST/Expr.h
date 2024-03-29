@@ -139,6 +139,8 @@ protected:
   friend class ASTStmtReader; // Sets dependence directly.
 
 public:
+  static bool toggleInterp();
+
   QualType getType() const { return TR; }
   void setType(QualType t) {
     // In C++, the type of an expression is always adjusted so that it

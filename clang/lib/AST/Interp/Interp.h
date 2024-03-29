@@ -45,6 +45,16 @@ template <typename T> bool ReturnValue(const T &V, APValue &R) {
   return true;
 }
 
+enum Result {
+  /// the expression was interpreted successfully
+  ConstOK,
+  /// generic failure case
+  // TODO[seth] more specifics?
+  NonConst,
+  /// we specifically ran into a case we don't support yet
+  NotImplemented,
+};
+
 /// Checks if the variable has externally defined storage.
 bool CheckExtern(InterpState &S, CodePtr OpPC, const Pointer &Ptr);
 

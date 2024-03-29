@@ -737,6 +737,11 @@ public:
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
   static bool classofKind(Kind K) { return K >= firstValue && K <= lastValue; }
 };
+// PointerLikeTypeTraits is specialized so it can be used with a forward-decl of
+// ValueDecl. Verify that we got it right.
+static_assert(llvm::PointerLikeTypeTraits<ValueDecl *>::NumLowBitsAvailable <=
+                  llvm::detail::ConstantLog2<alignof(ValueDecl)>::value,
+              "PointerLikeTypeTraits<ValueDecl *> assumes too much alignment.");
 
 /// A struct with extended info about a syntactic
 /// name qualifier, to be used for the case of out-of-line declarations.

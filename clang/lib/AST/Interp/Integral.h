@@ -122,7 +122,7 @@ public:
 
   bool isZero() const { return !V; }
 
-  bool isMin() const { return *this == min(bitWidth()); }
+  bool isMin() const { return *this == min(); }
 
   bool isMinusOne() const { return Signed && V == ReprT(-1); }
 
@@ -159,12 +159,8 @@ public:
 
   void print(llvm::raw_ostream &OS) const { OS << V; }
 
-  static Integral min(unsigned NumBits) {
-    return Integral(Min);
-  }
-  static Integral max(unsigned NumBits) {
-    return Integral(Max);
-  }
+  static Integral min() { return Integral(Min); }
+  static Integral max() { return Integral(Max); }
 
   template <typename ValT> static Integral from(ValT Value) {
     if constexpr (std::is_integral<ValT>::value)
