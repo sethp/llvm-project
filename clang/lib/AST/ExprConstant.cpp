@@ -173,7 +173,6 @@ namespace {
     case ConstantExprKind::Normal:
     case ConstantExprKind::ClassTemplateArgument:
     case ConstantExprKind::ImmediateInvocation:
-    case ConstantExprKind::CrossCall:
       // Note that non-type template arguments of class type are emitted as
       // template parameter objects.
       return false;
@@ -188,7 +187,6 @@ namespace {
     switch (Kind) {
     case ConstantExprKind::Normal:
     case ConstantExprKind::ImmediateInvocation:
-    case ConstantExprKind::CrossCall:
       return false;
 
     case ConstantExprKind::ClassTemplateArgument:
@@ -2463,7 +2461,7 @@ static bool CheckEvaluationResult(CheckEvaluationResultKind CERK,
        Type->isSpecificBuiltinType(BuiltinType::Char_U)))
     return true;
 
-  if (!Value.hasValue() && Kind != ConstantExprKind::CrossCall) {
+  if (!Value.hasValue()) {
     if (SubobjectDecl) {
       Info.FFDiag(DiagLoc, diag::note_constexpr_uninitialized)
           << /*(name)*/ 1 << SubobjectDecl;
@@ -16189,22 +16187,6 @@ bool Expr::EvaluateAsConstantExpr(EvalResult &Result, const ASTContext &Ctx,
       return false;
     return CheckConstantExpression(Info, getExprLoc(),
                                    getStorageType(Ctx, this), Result.Val, Kind);
-  }
-  if (Kind == ConstantExprKind::CrossCall) {
-    switch (this->getValueKind()) {
-    case VK_PRValue:
-      // TODO[seth]: what does this do (besides make tests pass)?
-      Info.EvalMode = EvalInfo::EM_IgnoreSideEffects;
-      // this->EvaluateAsRValue(&Result, &Ctx)
-      return ::EvaluateAsRValue(this, Result, Ctx, Info, Kind);
-    case VK_LValue:
-    case VK_XValue:
-      assert(this->isGLValue());
-      assert(false && "todo");
-      // return this->EvaluateAsLValue(Result, Ctx, true);
-      return false;
-    }
-    llvm_unreachable("unhandled ExprValueKind");
   }
 
   // The type of the object we're initializing is 'const T' for a class NTTP.

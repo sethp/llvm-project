@@ -189,41 +189,12 @@ bool ByteCodeExprGen<Emitter>::VisitCastExpr(const CastExpr *CE) {
       return true;
     return this->emitNull(classifyPrim(CE->getType()), CE);
 
-  case CK_NullToMemberPointer: {
-
-    // // 'Base.Member'
-    // const Expr *Base = CE->getBase();
-
-    // if (DiscardResult)
-    //   return this->discard(Base);
-
-    // if (!this->delegate(Base))
-    //   return false;
-
-    // // Base above gives us a pointer on the stack.
-    // // TODO: Implement non-FieldDecl members.
-    // const ValueDecl *Member = E->getMemberDecl();
-    // if (const auto *FD = dyn_cast<FieldDecl>(Member)) {
-    //   const RecordDecl *RD = FD->getParent();
-    //   const Record *R = getRecord(RD);
-    //   const Record::Field *F = R->getField(FD);
-    //   // Leave a pointer to the field on the stack.
-    //   if (F->Decl->getType()->isReferenceType())
-    //     return this->emitGetFieldPop(PT_Ptr, F->Offset, E);
-    //   return this->emitGetPtrField(F->Offset, E);
-    // }
-
-    // TODO[seth]: I think this is incomplete; is it OK to do this when we're
-    // initializing?
-    //
-    // cf. `MemberPointerExprEvaluator::VisitCastExpr`
-    return false;
-
-    // if (DiscardResult)
-    //   return true;
-
-    // return this->emitNull(classifyPrim(CE->getType()), CE);
-  }
+  case CK_NullToMemberPointer:
+    // cf. MemberPointerExprEvaluator::VisitCastExpr
+    if (DiscardResult)
+      return true;
+    return this->visitZeroInitializer(classifyPrim(CE->getType()),
+                                      CE->getType(), CE);
 
   case CK_PointerToIntegral: {
     // TODO: Discard handling.

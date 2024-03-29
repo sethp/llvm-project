@@ -59,8 +59,7 @@ bool EvalExpr(InterpState &S, CodePtr &PC, const Expr *E) {
   R.Diag = &Notes;
   const auto Eval = [&S](const Expr *E, Expr::EvalResult &Result) {
     Toggle InterpToggle;
-    return E->EvaluateAsConstantExpr(Result, S.getContext().getASTContext(),
-                                     ConstantExprKind::CrossCall);
+    return E->EvaluateAsConstantExpr(Result, S.getContext().getASTContext());
   };
 
   // fixme: move the visit logic around to avoid this wrapper

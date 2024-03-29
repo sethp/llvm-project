@@ -190,11 +190,8 @@ static bool interp__builtin_strcmp(InterpState &S, CodePtr OpPC,
   if (!CheckLive(S, OpPC, A, AK_Read) || !CheckLive(S, OpPC, B, AK_Read))
     return false;
 
-  // assert(A.getFieldDesc()->isPrimitiveArray());
-  // assert(B.getFieldDesc()->isPrimitiveArray());
-  if (!A.getFieldDesc()->isPrimitiveArray() ||
-      !B.getFieldDesc()->isPrimitiveArray())
-    return false;
+  assert(A.getFieldDesc()->isPrimitiveArray());
+  assert(B.getFieldDesc()->isPrimitiveArray());
 
   unsigned IndexA = A.getIndex();
   unsigned IndexB = B.getIndex();

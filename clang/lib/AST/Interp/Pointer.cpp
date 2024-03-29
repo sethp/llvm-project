@@ -243,17 +243,6 @@ std::optional<APValue> Pointer::toRValue(const ASTContext &Ctx) const {
     if (const auto *AT = Ty->getAs<AtomicType>())
       Ty = AT->getValueType();
 
-    // TODO[seth]: why here? oughtn't the ptr be zero?
-    // maybe the MTE is messing it up?
-    //
-    // MaterializeTemporaryExpr 0x55556b47a968 'nullptr_t' xvalue
-    // `- CXXNullPtrLiteralExpr 0x55556b47a8c8 'nullptr_t'
-    if (Ty->isNullPtrType()) {
-      R = APValue(static_cast<Expr *>(nullptr), CharUnits::Zero(), {}, false,
-                  true);
-      return true;
-    }
-
     // Invalid pointers.
     if (Ptr.isDummy() || !Ptr.isLive() ||
         (!Ptr.isUnknownSizeArray() && Ptr.isOnePastEnd()))
